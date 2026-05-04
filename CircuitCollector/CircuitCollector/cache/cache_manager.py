@@ -81,7 +81,7 @@ class CacheManager:
         Generate a valid SQL table name from circuit path.
 
         Args:
-            circuit: Base config path (e.g., "config/skywater/opamp/tsm.toml")
+            circuit: Base config path (e.g., "config/skywater/opamp/5tota_single.toml")
 
         Returns:
             Valid SQL table name (e.g., "skywater_opamp_tsm")
@@ -135,7 +135,7 @@ class CacheManager:
         Generate canonical cache key.
 
         Args:
-            circuit: Base config path (e.g., "config/skywater/opamp/tsm.toml")
+            circuit: Base config path (e.g., "config/skywater/opamp/5tota_single.toml")
             params: Simulation parameters
 
         Returns:

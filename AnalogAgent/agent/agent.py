@@ -101,7 +101,10 @@ TOOL_DEFINITIONS = [
             "or the full curve as a list of {gm_id, value} pairs if gm_id_val is omitted.\n"
             "Available devices: 'nfet', 'pfet' (SKY130 nfet_01v8, pfet_01v8).\n"
             "Available metrics: 'gm_id' (S/A), 'gm_gds' (V/V), 'id_w' (A/m = uA/um), "
-            "'ft' (Hz), 'cgg_w' (F/m), 'cgd_w' (F/m), 'cgs_w' (F/m), 'vov' (V).\n"
+            "'ft' (Hz), 'cgg_w' (F/m), 'cgd_w' (F/m), 'cgs_w' (F/m), 'cdb_w' (F/m), "
+            "'vgs' (V), 'vth' (V), 'vdsat' (V).\n"
+            "Use 'vdsat' (BSIM4 |VDS|_sat, positive magnitude) for all "
+            "saturation-headroom and cascode-bias calculations.\n"
             "Supports PVT corner and temperature selection."
         ),
         "input_schema": {
@@ -113,7 +116,7 @@ TOOL_DEFINITIONS = [
                 },
                 "metric": {
                     "type": "string",
-                    "description": "Metric to look up: 'gm_id', 'gm_gds', 'id_w', 'ft', 'cgg_w', 'cgd_w', 'cgs_w', 'vov'",
+                    "description": "Metric to look up: 'gm_id', 'gm_gds', 'id_w', 'ft', 'cgg_w', 'cgd_w', 'cgs_w', 'cdb_w', 'vgs', 'vth', 'vdsat'",
                 },
                 "L": {
                     "type": "number",
@@ -125,7 +128,7 @@ TOOL_DEFINITIONS = [
                 },
                 "temp": {
                     "type": "string",
-                    "description": "Temperature: '0C', '25C', '75C' (default: '25C')",
+                    "description": "Temperature: '-40C', '25C', '85C' (default: '25C'). Other values are linearly interpolated between bracketing reference temperatures.",
                 },
                 "gm_id_val": {
                     "type": "number",
@@ -170,7 +173,7 @@ TOOL_DEFINITIONS = [
             "This translates gm/Id-space decisions (gm_id, L, Id per role) into "
             "the W/L ratio, finger count, and device params that CircuitCollector expects. "
             "Supports two topologies:\n"
-            "  - '5t_ota': 4 roles (DIFF_PAIR, LOAD, TAIL, BIAS_REF) → 5tota\n"
+            "  - '5t_ota': 4 roles (DIFF_PAIR, LOAD, TAIL, BIAS_GEN) → 5tota\n"
             "  - 'twostage': 6 roles (DIFF_PAIR, LOAD, BIAS_GEN, TAIL, OUTPUT_CS, OUTPUT_BIAS) → tsm\n"
             "Each role needs: gm_id_target (S/A), L_guidance_um (µm), id_derived (A). "
             "The tool uses LUT data to compute W from (gm_id, L, Id), then applies "
@@ -189,10 +192,10 @@ TOOL_DEFINITIONS = [
                     "description": (
                         "Dict of role_name -> {gm_id_target, L_guidance_um, id_derived}. "
                         "Example for 5T OTA: "
-                        '{"DIFF_PAIR": {"gm_id_target": 12.0, "L_guidance_um": 1.08, "id_derived": 5e-5}, '
-                        '"LOAD": {"gm_id_target": 12.0, "L_guidance_um": 1.08, "id_derived": 5e-5}, '
-                        '"TAIL": {"gm_id_target": 11.0, "L_guidance_um": 1.08, "id_derived": 1e-4}, '
-                        '"BIAS_REF": {"gm_id_target": 0, "L_guidance_um": 1.08, "id_derived": 1e-5}}'
+                        '{"DIFF_PAIR": {"gm_id_target": 12.0, "L_guidance_um": 1.0, "id_derived": 5e-5}, '
+                        '"LOAD": {"gm_id_target": 12.0, "L_guidance_um": 1.0, "id_derived": 5e-5}, '
+                        '"TAIL": {"gm_id_target": 11.0, "L_guidance_um": 1.0, "id_derived": 1e-4}, '
+                        '"BIAS_GEN": {"gm_id_target": 0, "L_guidance_um": 1.0, "id_derived": 1e-5}}'
                     ),
                 },
                 "Ib_a": {
@@ -224,7 +227,8 @@ TOOL_DEFINITIONS = [
             "Noise (input_noise_density_1Hz, input_noise_density_spot, output_noise_density_1Hz, "
             "output_noise_density_spot, integrated_input_noise, integrated_output_noise), "
             "Slew rate (slew_rate_pos, slew_rate_neg), "
-            "Output swing (vout_low, vout_high, output_swing)\n"
+            "Output swing (vout_low, vout_high, output_swing), "
+            "Mismatch (vos_mismatch_3sigma — 3σ offset from Monte Carlo)\n"
             "  - transistors: per-device OP data (gm, gds, id, vgs, vds, vth, region, cgg)"
         ),
         "input_schema": {
@@ -292,7 +296,9 @@ TOOL_DEFINITIONS = [
 
 _LUT_UNITS = {
     "gm_id": "S/A", "gm_gds": "V/V", "id_w": "A/m (=uA/um)",
-    "ft": "Hz", "cgg_w": "F/m", "cgd_w": "F/m", "cgs_w": "F/m", "vov": "V",
+    "ft": "Hz",
+    "cgg_w": "F/m", "cgd_w": "F/m", "cgs_w": "F/m", "cdb_w": "F/m",
+    "vgs": "V", "vth": "V", "vdsat": "V",
 }
 
 

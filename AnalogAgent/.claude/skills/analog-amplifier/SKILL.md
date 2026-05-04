@@ -21,7 +21,7 @@ description: >
 
 ```
 general/
-  spec-form-template.md              Reusable spec input form
+  (spec-form-template.md lives in AnalogAgent root directory)
   flow/
     spec-understanding.md            Validate spec form
     circuit-understanding.md         Identify topology, route to design flow
@@ -42,9 +42,6 @@ circuit-specific/<topology>/
 |---|---|---|
 | 5-Transistor OTA | `circuit-specific/5TOTA/` | `5t-ota-equation.md`, `5t-ota-design-flow.md`, `5t-ota-root-cause-diagnosis.md` |
 | Two-Stage Miller (TSM) | `circuit-specific/tsm/` | `tsm-equation.md`, `tsm-design-flow.md`, `tsm-root-cause-diagnosis.md` |
-| Folded-Cascode OTA | `circuit-specific/folded cascode/` | `fc-ota-equation.md`, `fc-ota-design-flow.md`, `fc-ota-root-cause-diagnosis.md` |
-| Telescopic OTA | `circuit-specific/telescopic/` | `tco-equation.md`, `tco-design-flow.md`, `tco-root-cause-diagnosis.md` |
-| Rail-to-Rail Opamp | `circuit-specific/rtr/` | `r2r-opamp-equation.md`, `r2r-opamp-design-flow.md`, `r2r-opamp-root-cause-diagnosis.md` |
 
 ## Design Flow
 
@@ -95,10 +92,11 @@ User provides netlist + filled spec form
         │ (success or timeout)
         ▼
 ┌─[6] DESIGN REVIEW ───────────────────────────────────────────┐
-│  Read: general/flow/design-review.md                           │
+│  Read: general/flow/design-review.md  (format is STRICT — do  │
+│    not rename/add/merge sections; fill the verbatim template)  │
 │  Output: Sections 1–4 (always)                                 │
 │  IF Extreme_PVT = yes:                                         │
-│    Run sim at SS/70°C and FF/0°C with LLM params               │
+│    Run sim at SS/85°C and FF/−40°C with LLM params             │
 │    Output: Section 5 — Extreme PVT results                     │
 │  IF Optimize = yes:                                            │
 │    Read: general/knowledge/numerical-optimization.md           │

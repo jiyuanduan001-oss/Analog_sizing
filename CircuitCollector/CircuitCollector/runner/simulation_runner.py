@@ -106,6 +106,7 @@ class SimulationRunner:
                     noise_file=out / f"{self.circuit_instance_name}_NOISE.txt",
                     slew_rate_file=out / f"{self.circuit_instance_name}_SLEW_RATE.txt",
                     output_swing_file=out / f"{self.circuit_instance_name}_OUTPUT_SWING.txt",
+                    mismatch_file=out / f"{self.circuit_instance_name}_MISMATCH.txt",
                 )
             else:
                 result = {}
@@ -195,6 +196,8 @@ class SimulationRunner:
                             / f"{self.circuit_instance_name}_SLEW_RATE.txt",
                             output_swing_file=self.output_dir
                             / f"{self.circuit_instance_name}_OUTPUT_SWING.txt",
+                            mismatch_file=self.output_dir
+                            / f"{self.circuit_instance_name}_MISMATCH.txt",
                         )
                     else:
                         result = {}

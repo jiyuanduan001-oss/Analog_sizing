@@ -19,8 +19,7 @@ import asyncio
 import logging
 import re
 import traceback
-from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from fastapi import APIRouter, HTTPException
 
@@ -144,6 +143,10 @@ sr_tstop = "20u"
 measure_output_swing = true
 swing_vstep = 0.001
 
+[testbench.mismatch]
+measure_mismatch = true
+mc_num_runs = 50
+
 [testbench.data]
 data_DC = "DC"
 data_AC = "AC"
@@ -151,7 +154,45 @@ data_GBW_PM = "GBW_PM"
 data_NOISE = "NOISE"
 data_SLEW_RATE = "SLEW_RATE"
 data_OUTPUT_SWING = "OUTPUT_SWING"
+data_MISMATCH = "MISMATCH"
 """
+
+
+def _append_extra_ports_to_subckt(netlist_j2: str, extra_ports: List[str]) -> str:
+    """
+    Append extra port names to the `.subckt <name> ...` header line of a
+    Jinja2-parameterized netlist. Ports already present (by case-insensitive
+    match) are not duplicated.
+
+    If no `.subckt` header is found, the netlist is returned unchanged.
+    """
+    if not extra_ports:
+        return netlist_j2
+
+    lines = netlist_j2.splitlines()
+    for i, line in enumerate(lines):
+        stripped = line.lstrip()
+        if stripped.lower().startswith(".subckt"):
+            tokens = stripped.split()
+            existing_lower = {t.lower() for t in tokens[2:]}
+            additions = [p for p in extra_ports if p.lower() not in existing_lower]
+            if additions:
+                indent = line[: len(line) - len(stripped)]
+                lines[i] = indent + " ".join(tokens + additions)
+            break
+    return "\n".join(lines) + ("\n" if netlist_j2.endswith("\n") else "")
+
+
+def _render_extra_ports_toml(extra_ports: Dict[str, float]) -> str:
+    """
+    Render a `[testbench.extra_ports]` TOML section with port → DC voltage
+    mappings. Used by the testbench generator to create DC voltage sources
+    and wire them into DUT instantiations.
+    """
+    lines = ["", "[testbench.extra_ports]"]
+    for port, voltage in extra_ports.items():
+        lines.append(f'{port} = {float(voltage)}')
+    return "\n".join(lines) + "\n"
 
 
 def _augment_toml(toml_text: str) -> str:
@@ -177,13 +218,7 @@ def _augment_toml(toml_text: str) -> str:
             continue
         out_lines.append(line)
 
-    # Also set VCM_ratio and temperature in [testbench.dc] if not present
     result = "\n".join(out_lines)
-    if "VCM_ratio" not in result:
-        result = result.replace(
-            "supply_voltage = 1.8",
-            "supply_voltage = 1.8\nVCM_ratio = 0.5\ntemperature = 27",
-        )
 
     # Append extra sections
     result = result.rstrip() + "\n" + _EXTRA_TOML_SECTIONS
@@ -192,7 +227,10 @@ def _augment_toml(toml_text: str) -> str:
 
 
 def _do_register(
-    raw_netlist: str, topology_name: str, circuit_type: str
+    raw_netlist: str,
+    topology_name: str,
+    circuit_type: str,
+    extra_ports: Optional[Dict[str, float]] = None,
 ) -> Tuple[str, str, str, str]:
     """
     Core registration logic (synchronous).
@@ -206,23 +244,30 @@ def _do_register(
     netlist_j2_abs = circuit_dir / "netlist.j2"
     notice_abs = circuit_dir / "notice.txt"
 
+    extra_port_names: List[str] = list(extra_ports.keys()) if extra_ports else []
+
     # Check if already exists with same content
     if netlist_j2_abs.exists() and config_path_abs.exists():
         existing = netlist_j2_abs.read_text()
         fmt = _detect_format(raw_netlist)
-        if fmt == "jinja2" and existing.strip() == raw_netlist.strip():
-            return (
-                config_path_rel,
-                netlist_j2_path_rel,
-                "already_exists",
-                "Topology already registered with identical netlist",
-            )
+        if fmt == "jinja2":
+            # Compare against the post-extra-ports-rewrite version so a repeat
+            # registration with the same extra_ports is a no-op.
+            candidate = _append_extra_ports_to_subckt(raw_netlist, extra_port_names)
+            if existing.strip() == candidate.strip():
+                return (
+                    config_path_rel,
+                    netlist_j2_path_rel,
+                    "already_exists",
+                    "Topology already registered with identical netlist",
+                )
         # Different content: proceed to overwrite
 
     # Step 1: Convert to netlist.j2 based on format
     fmt = _detect_format(raw_netlist)
     logger.info(
-        "Registering topology '%s' (format: %s)", topology_name, fmt
+        "Registering topology '%s' (format: %s, extra_ports: %s)",
+        topology_name, fmt, extra_port_names,
     )
 
     if fmt == "jinja2":
@@ -240,6 +285,12 @@ def _do_register(
             "Netlist has literal numeric W/L/M values. "
             "Please provide a parameterized netlist with {{ Mx_L }}, {{ Mx_W }}, "
             "{{ Mx_M }} Jinja2 placeholders or MOSFET_<n>_L/W/M expressions."
+        )
+
+    # Step 1b: Extend .subckt header with any extra_ports
+    if extra_port_names:
+        netlist_j2_text = _append_extra_ports_to_subckt(
+            netlist_j2_text, extra_port_names
         )
 
     # Step 2: Write netlist.j2 and notice.txt
@@ -267,6 +318,10 @@ def _do_register(
 
     # Step 4: Augment with full testbench sections
     toml_text = _augment_toml(toml_text)
+
+    # Step 4b: Append extra_ports section if any
+    if extra_ports:
+        toml_text = toml_text.rstrip() + "\n" + _render_extra_ports_toml(extra_ports)
 
     # Step 5: Write TOML
     config_path_abs.parent.mkdir(parents=True, exist_ok=True)
@@ -307,6 +362,7 @@ async def register_circuit(req: RegisterCircuitRequest):
             req.raw_netlist,
             req.topology_name,
             req.circuit_type,
+            req.extra_ports,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))

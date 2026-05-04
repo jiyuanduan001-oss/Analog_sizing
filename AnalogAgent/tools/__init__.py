@@ -20,3 +20,4 @@ from .bridge_twostage import (
 from .param_converter import convert_sizing, list_topologies, TOPOLOGY_REGISTRY
 from .api_client import register_circuit
 from .topology_manager import ensure_topology_registered
+from .optimizer import coordinate_warmup, cma_es, make_batch_evaluator, compute_penalty

@@ -11,7 +11,7 @@ def test_random_params_generator():
     print("=== Testing CSV Template Generation ===\n")
 
     # Setup paths
-    base_config_path = PROJECT_ROOT / "config/skywater/opamp/tsm.toml"
+    base_config_path = PROJECT_ROOT / "config/skywater/opamp/5tota_single.toml"
     base_config = load_toml(base_config_path)
     circuit_type = base_config["type"]["name"]
     circuit_name = base_config[f"{circuit_type}"]["name"]

@@ -27,18 +27,8 @@ from tools.bridge import RoleTarget
 # }
 
 TOPOLOGY_REGISTRY: dict[str, dict] = {
-    "5t_ota": {
-        "bridge_module": "tools.bridge",
-        "config_path":   "config/skywater/opamp/5tota.toml",
-        "requires_Cc":   False,
-        "roles":         ["DIFF_PAIR", "LOAD", "TAIL", "BIAS_REF"],
-    },
-    "twostage": {
-        "bridge_module": "tools.bridge_twostage",
-        "config_path":   "config/skywater/opamp/tsm.toml",
-        "requires_Cc":   True,
-        "roles":         ["DIFF_PAIR", "LOAD", "BIAS_GEN", "TAIL", "OUTPUT_CS", "OUTPUT_BIAS"],
-    },
+    # All topologies are now registered dynamically via ensure_topology_registered().
+    # No hardcoded entries — CircuitCollector generates netlist.j2 and TOML on demand.
 }
 
 
@@ -57,6 +47,8 @@ def convert_sizing(
     Cc_f: Optional[float] = None,
     Rc_ohm: Optional[float] = None,
     l_overrides: Optional[dict[str, float]] = None,
+    corner: str = "tt",
+    temp: str = "25C",
 ) -> dict:
     """
     Convert per-role sizing targets into a CircuitCollector params dict.
@@ -68,6 +60,13 @@ def convert_sizing(
         Cc_f:        Compensation capacitor in Farads (required for some topologies).
         Rc_ohm:      Nulling resistor in Ohms (twostage only; = 1/gm7).
         l_overrides: Optional per-role L (µm) overrides.
+        corner:      Process corner for LUT queries (default "tt"). Must
+                     match the corner used for the subsequent SPICE run.
+        temp:        Temperature string for LUT queries, e.g. "27C"
+                     (default "25C"). Must match the SPICE temperature,
+                     otherwise the LUT-derived W targets a different
+                     temperature than the simulator and the OP point
+                     lands in the wrong inversion region.
 
     Returns:
         {"status": "ok", "params": {...}, "config_path": "..."}
@@ -100,32 +99,23 @@ def convert_sizing(
             inversion_region=vals.get("inversion_region"),
         )
 
-    # Dispatch to the correct bridge
+    # Dispatch to the generic bridge (all topologies use this now)
     try:
-        if topology == "5t_ota":
-            from tools.bridge import SizingResult, sizing_result_to_params
-            sizing = SizingResult(roles=role_targets)
-            params = sizing_result_to_params(sizing, l_overrides=l_overrides)
-            params["ibias"] = Ib_a
+        if "role_device_map" not in info:
+            return {"status": "error", "message": f"Topology '{topology}' missing role_device_map. Re-register via ensure_topology_registered()."}
 
-        elif topology == "twostage":
-            from tools.bridge_twostage import sizing_result_to_params as ts_convert
-            params = ts_convert(role_targets, Cc_f=Cc_f, Ib_a=Ib_a, Rc_ohm=Rc_ohm, l_overrides=l_overrides)
-
-        elif info.get("bridge_module") == "tools.bridge_generic":
-            from tools.bridge_generic import sizing_result_to_params as generic_convert
-            params = generic_convert(
-                role_targets,
-                role_device_map=info["role_device_map"],
-                Ib_a=Ib_a,
-                Cc_f=Cc_f,
-                Rc_ohm=Rc_ohm,
-                passive_params=info.get("passive_params"),
-                l_overrides=l_overrides,
-            )
-
-        else:
-            return {"status": "error", "message": f"No converter implemented for '{topology}'."}
+        from tools.bridge_generic import sizing_result_to_params as generic_convert
+        params = generic_convert(
+            role_targets,
+            role_device_map=info["role_device_map"],
+            Ib_a=Ib_a,
+            Cc_f=Cc_f,
+            Rc_ohm=Rc_ohm,
+            passive_params=info.get("passive_params"),
+            l_overrides=l_overrides,
+            corner=corner,
+            temp=temp,
+        )
 
         return {
             "status": "ok",

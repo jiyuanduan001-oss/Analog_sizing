@@ -24,10 +24,10 @@ def create_parser():
         epilog="""
         Examples:
         # Run simulation based on config file strategy
-        python simulate.py config/skywater/opamp/tsm.toml
+        python simulate.py config/skywater/opamp/5tota_single.toml
 
         # Specify output directory
-        python simulate.py config/skywater/opamp/tsm.toml --output results/my_simulation
+        python simulate.py config/skywater/opamp/5tota_single.toml --output results/my_simulation
         """,
     )
 

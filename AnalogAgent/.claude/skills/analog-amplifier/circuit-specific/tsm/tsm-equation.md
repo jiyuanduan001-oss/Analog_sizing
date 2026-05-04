@@ -53,30 +53,37 @@ M5/M6/M8 share L; mirror ratios set by finger count.
 Once **(gm, L, gm/ID)** are determined for a device (see design-flow),
 all remaining parameters are derived from the LUT.
 
-**LUT units:** id_w is stored in A/m (= µA/µm), cgs_w/cgd_w in F/m, ft in Hz, vov in V.
-Ensure unit consistency when mixing SI-derived values (gm in S, ID in A) with LUT values.
+**LUT units:** id_w is stored in A/m, cgs_w/cgd_w/cdb_w in F/m, ft in Hz, vgs/vth/vdsat in V.
+All LUT per-width metrics use SI base unit meters. Derived W is in meters.
+
+**LUT API:** `lut_query(device, metric, L, corner=corner, temp=temp_str, gm_id_val=gm_id)`
+where `temp` is a string like `'27C'`, `'40C'`, `'70C'` — NOT a bare integer.
+`list_available_L(device, corner=corner, temp=temp_str)` uses the same `temp` format.
 
 ```
-LUT query format: lut_query(device_type, metric, L, gm_id_val=gm_id)
+LUT query format: lut_query(device_type, metric, L, corner=corner, temp=temp_str, gm_id_val=gm_id)
 
 ID      = gm / (gm/ID)                         derived
-id_w    = lut_query(dev, 'id_w',  L, gm_id)    from LUT (µA/µm)
-W       = ID / id_w                             derived (µm)
+id_w    = lut_query(dev, 'id_w',  L, gm_id)    from LUT (A/m)
+W       = ID / id_w                             derived (m)  ← meters, not µm
 gm_gds  = lut_query(dev, 'gm_gds', L, gm_id)  from LUT
 gds     = gm / gm_gds                          derived (S)
 ft      = lut_query(dev, 'ft',    L, gm_id)    from LUT (Hz)
 cgs_w   = lut_query(dev, 'cgs_w', L, gm_id)    from LUT (F/m)
 cgd_w   = lut_query(dev, 'cgd_w', L, gm_id)    from LUT (F/m)
-Cgs     = cgs_w × W × 1e-6                     derived (F)
-Cgd     = cgd_w × W × 1e-6                     derived (F)
-vov     = lut_query(dev, 'vov',   L, gm_id)    from LUT (V)
+cdb_w   = lut_query(dev, 'cdb_w', L, gm_id)    from LUT (F/m)
+Cgs     = cgs_w × W                            derived (F)  ← no 1e-6 (W is already in m)
+Cgd     = cgd_w × W                            derived (F)  ← no 1e-6 (W is already in m)
+Cdb     = cdb_w × W                            derived (F)  ← drain-bulk junction cap
+vdsat   = lut_query(dev, 'vdsat', L, gm_id)    from LUT (V) — BSIM4 |VDS|_sat, positive magnitude
 ```
 
-Since M3 ≡ M4: `gm3 = gm4`, `gds3 = gds4`, `Cgs3 = Cgs4`, `Cgd3 = Cgd4`.
-Since M1 ≡ M2: `gm1 = gm2`, `gds1 = gds2`, `Cgs1 = Cgs2`, `Cgd1 = Cgd2`.
+⚠️ **Common pitfall**: W = ID / id_w yields **meters** (not µm) because
+id_w is A/m. When displaying W, multiply by 1e6 to show µm. When computing
+Cgs = cgs_w × W, use W in meters directly — do NOT multiply by 1e-6.
 
-⚠️ LUT `vov` for PFET may return Vgs instead of Vov. Use `vov ≈ 2/(gm/ID)`
-as an analytical estimate if the LUT value seems unreasonable (|vov| > 0.5V).
+Since M3 ≡ M4: `gm3 = gm4`, `gds3 = gds4`, `Cgs3 = Cgs4`, `Cgd3 = Cgd4`, `Cdb3 = Cdb4`.
+Since M1 ≡ M2: `gm1 = gm2`, `gds1 = gds2`, `Cgs1 = Cgs2`, `Cgd1 = Cgd2`, `Cdb1 = Cdb2`.
 
 ---
 
@@ -109,20 +116,51 @@ P = VDD × (I_bias + I_tail + ID7)
 All values are computable from the LUT except noise parameters (Kf, Cox, µ)
 which are process-dependent and evaluated by the simulator.
 
+### Sub-Block Abstraction
+
+Three roles in the TSM are current-source / load sub-blocks:
+**LOAD** (M1/M2) in the first stage, **OUTPUT_BIAS** (M8) in the
+second stage, and **TAIL** (M6) for the input pair. Each can be a
+single transistor, a regular cascode, or an lv_cascode. The sub-block
+exposes `gds_eq`, `C_eq`, `p_int`, `V_headroom` — see
+`general/knowledge/mirror-load-structures.md`.
+
+Substitution map for the TSM equations below:
+
+| In formulas | single | cascode / lv_cascode |
+|-------------|--------|----------------------|
+| `gds_eq_LOAD`  | `gds1` | `(gds1 × gds_loadcas) / gm_loadcas` |
+| `C_eq_LOAD`    | `Cgd1 + Cdb1` | `Cgd_loadcas + Cdb_loadcas` |
+| `p_int_LOAD`   | none   | `gm_loadcas / C_int_LOAD` |
+| `gds_eq_OBIAS` | `gds8` | `(gds8 × gds_obcas) / gm_obcas` |
+| `C_eq_OBIAS`   | `Cgd8 + Cdb8` | `Cgd_obcas + Cdb_obcas` |
+| `p_int_OBIAS`  | none   | `gm_obcas / C_int_OBIAS` |
+| `gds_eq_TAIL`  | `gds6` | `(gds6 × gds_tcas) / gm_tcas` |
+| `V_headroom_TAIL` | `vdsat6` | `vdsat6 + vdsat_tcas` |
+
+Where:
+- `C_int_LOAD  = Cgs_loadcas + Cdb1 + Cgd1`
+- `C_int_OBIAS = Cgs_obcas   + Cdb8 + Cgd8`
+
+For the lv_cascode TAIL variant, the cascode gate is an external
+subcircuit port `Vbias_cas_n`:
+`Vbias_cas_n = vdsat6 + vdsat_tcas + vth_tcas`  (NMOS, rail = VSS)
+
 ### DC Gain
 
 First-stage gain:
-`A_v1 = gm3 / (gds3 + gds1)`
+`A_v1 = gm3 / (gds3 + gds_eq_LOAD)`
 
 Second-stage gain:
-`A_v2 = gm7 / (gds7 + gds8)`
+`A_v2 = gm7 / (gds7 + gds_eq_OBIAS)`
 
 Total open-loop DC gain:
-`A0 = A_v1 × A_v2 = [gm3/(gds3+gds1)] × [gm7/(gds7+gds8)]`
+`A0 = A_v1 × A_v2`
 
-To select L during initial sizing: sweep L, query `gm_gds` for nfet,
-pick L where `gm_gds_M3 / 2 ≥ sqrt(A0_target_linear)`.
-Then compute the exact A0 once all devices are sized.
+To select L during initial sizing (single load): sweep L, query
+`gm_gds` for nfet, pick L where `gm_gds_M3 / 2 ≥ sqrt(A0_target_linear)`.
+For cascode/lv_cascode loads, much shorter L can meet the gain because
+the cascode provides an extra (gm_cas·ro_cas) factor.
 
 ### Poles, Zeros, and Transfer Function
 
@@ -164,94 +202,141 @@ H(s) ≈ A0 / [(1 + s/p1)(1 + s/p3)(1 + s/p4)]
 ```
 p4 = gm7/C1 arises from the Rc–C1 interaction at net5.
 
-**Dominant pole (p1):**
+See `tsm-transfer-function.md` for the full KCL-based derivation with
+all parasitic capacitances.
+
+#### Node Capacitances
+
+The pole locations depend on total capacitance at each node. These
+change with the LOAD and OUTPUT_BIAS sub-block types:
+
+**Single load / single output-bias:**
+```
+C1  = Cgs7 + Cdb2 + Cdb4 + Cgd2 + Cgd4 + Cgd7    [cap at net5 — includes Cgd7 coupling to vout]
+CTL = CL + Cdb7 + Cdb8 + Cgd7 + Cgd8               [total output cap]
+C2  = Cgs1 + Cgs2 + Cdb1 + Cdb3 + Cgd2 + Cgd3     [cap at net1 — includes Cgd2/Cgd3 coupling]
+```
+
+**Cascode / LV-cascode LOAD:** `Cdb1` moves from net1 to internal node;
+`Cgd_loadcas + Cdb_loadcas` replace it at net1:
+```
+C2  = Cgs1 + Cgs2 + Cgd_loadcas + Cdb_loadcas + Cdb3 + Cgd3
+C_int_LOAD = Cgs_loadcas + Cdb1 + Cgd1
+```
+
+**Cascode / LV-cascode OUTPUT_BIAS:** `Cdb8 + Cgd8` in CTL replaced by
+cascode device caps:
+```
+CTL = CL + Cdb7 + Cdb_obcas + Cgd7 + Cgd_obcas
+C_int_OBIAS = Cgs_obcas + Cdb8 + Cgd8
+```
+
+#### Poles
+
+**Dominant pole (p1) — Miller-multiplied Cc at output:**
 ```
 p1 = gm3 / (A0 · Cc)   [rad/s]
-f_p1 = p1 / (2π)
 ```
 
 **Output pole (p2):**
 ```
 p2 = gm7·Cc / (C1·Cc + C1·CTL + Cc·CTL)   [rad/s]
-
-where:
-  C1  = Cgs7 + Cdb2 + Cdb4 + Cgd2 + Cgd4    [cap at 1st-stage output, net5]
-  CTL = CL + Cdb7 + Cdb8 + Cgd7 + Cgd8       [total output cap]
 ```
 
-Simplified (when CL >> parasitic caps):
+**Mirror pole (p3) — at net1:**
 ```
-p2 ≈ gm7 / CL
+G_net1 = gm1 + gds1 + gds3              [M1 diode + M3 gds]
+p3 = G_net1 / C2                         [rad/s]
 ```
+LHP zero at `≈ 2×p3` (mirror zero, same doublet as 5T OTA).
 
-**Mirror pole (p3):**
-```
-p3 = gm1 / C2   [rad/s]
-
-where:
-  C2 = Cgs1 + Cgs2 + Cdb1 + Cdb3 + Cgd3    [cap at mirror node, net1]
-```
-
-Simplified (when Cgs1 + Cgs2 dominate):
-```
-p3 ≈ gm1 / (2·Cgs1)
-```
-
-**Compensation pole (p4):**
+**Compensation pole (p4) — at net5 from Rc–C1 interaction:**
 ```
 p4 = gm7 / C1   [rad/s]
 ```
 
-### GBW and Phase Margin
-
-**Unity-gain bandwidth (GBW):**
+**Cascode internal poles** (only when sub-block is cascode/lv_cascode):
 ```
-ω_c ≈ gm3 / Cc
+p_int_LOAD  = gm_loadcas / C_int_LOAD
+p_int_OBIAS = gm_obcas / C_int_OBIAS
+```
+
+#### Zeros
+
+**RHP zero from Cc feedforward (before Rc compensation):**
+```
+z_rhp = gm7 / Cc − 1/(Rc·Cc)   [rad/s]
+```
+When Rc > 1/gm7, this moves to the LHP.
+
+**LHP zero from Rc nulling (placed to cancel p2):**
+Setting z_LHP = p2 gives:
+```
+Rc = (1/gm7) · (Cc + C1)·(Cc + CTL) / Cc²
+```
+
+**Mirror zero (LHP):**
+```
+fz_mirror ≈ 2 × |p3| / (2π)
+```
+
+**Cgd3/Cgd4 feedforward zeros (RHP):**
+```
+fz_rhp_dp = gm3 / (2π·Cgd3)             [from diff pair Cgd to net5/net1]
+```
+
+#### GBW
+
+```
+ω_c = gm3 / Cc
 GBW = gm3 / (2π·Cc)
 ```
-Valid when non-dominant poles p2, p3, p4 > 2 × ω_c.
 
-**Phase margin (general, all four poles):**
-```
-PM = 90° - arctan(ω_c/p2) - arctan(ω_c/p3) - arctan(ω_c/p4)
-```
-Since p1 << ω_c, `arctan(ω_c/p1) ≈ 90°`, reducing the 180° baseline to 90°.
+#### Phase Margin
 
-**Phase margin (with Rc cancelling p2):**
+**General (all poles):**
+```
+PM = 90° − arctan(ω_c/p2) − arctan(ω_c/p3) − arctan(ω_c/p4) − arctan(ω_c/fz_rhp_dp·2π)
+```
 
-When `Rc = (1/gm7)·(1 + CL/Cc)`, the LHP zero cancels p2:
+**With Rc cancelling p2 (preferred operating mode):**
 ```
-PM = 90° - arctan(ω_c/p3) - arctan(ω_c/p4)
+PM = 90° − arctan(ω_c/p3) − arctan(ω_c/p4) + arctan(ω_c/fz_mirror·2π) − arctan(ω_c/fz_rhp_dp·2π)
 ```
-This is the preferred operating mode. PM is now set by the mirror pole
-p3 and compensation pole p4 only.
+
+**Additional cascode internal pole penalties:**
+```
+if p_int_LOAD  is not None: PM -= arctan(ω_c / p_int_LOAD)
+if p_int_OBIAS is not None: PM -= arctan(ω_c / p_int_OBIAS)
+```
+
+Design constraint: each cascode `p_int > 3 × ω_c`.
 
 ### Slew Rate
 
-Positive and negative slew rates are separate specs:
 ```
 SR+ = I_tail / Cc
-SR- = min(I_tail / Cc,  ID7 / (Cc + CTL))
+SR- = min(I_tail / Cc,  ID7 / CTL)
 ```
 
-SR+ is limited by the 1st stage driving net5 through Cc (M7 can source
-well beyond its quiescent current during positive slew, so it is not
-the bottleneck).
+where `CTL = CL + Cdb7 + Cdb8 + Cgd7 + Cgd8` is the total output
+capacitance including parasitics.
 
-SR- is limited by whichever is slower: the 1st stage driving net5
-(I_tail/Cc) or M8 discharging the output (ID7/(Cc + CTL)).
+SR+ is limited by the 1st stage driving net5 through Cc. SR- is
+limited by whichever is slower: the 1st stage or M8 discharging
+the output.
 
 Design constraint for symmetric SR:
 ```
-ID7 ≥ I_tail × (Cc + CTL) / Cc
+ID7 ≥ I_tail × CTL / Cc
 ```
 
 ### Output Swing
 
 ```
-V_out,min = Vov_M8            (M8 saturation)
-V_out,max = VDD - |Vov_M7|    (M7 saturation)
-V_swing = VDD - |Vov_M7| - Vov_M8
+V_out,min = Vdsat_M8            (M8 saturation)
+V_out,max = VDD - Vdsat_M7      (M7 saturation)
+V_swing = VDD - Vdsat_M7 - Vdsat_M8
 ```
 
 ### Noise (input-referred)
@@ -280,18 +365,18 @@ V²_noise = S_1f² × ln(fH/fL) + S_thermal² × (fH - fL)
 
 **CMRR:**
 ```
-CMRR = 2·gm3·gm1 / [(gds3 + gds1)·gds6]
+CMRR = 2·gm3·gm1 / [(gds3 + gds1)·gds_eq_TAIL]
 ```
-Dominated by tail current source impedance (ro6 = 1/gds6).
-Increase L6 (equivalently L5, since they share L) to improve CMRR.
+Dominated by tail current source impedance (`ro_eq_TAIL = 1/gds_eq_TAIL`).
 
-⚠️ **Accuracy note:** When M6 operates near the saturation boundary
-(Vds ≈ Vov, margin < 50 mV), the OP-extracted gds6 is the tangent
-slope at one bias point and may overestimate the effective small-signal
-conductance seen by the AC CMRR measurement. The BSIM4 model uses a
-continuous gds(Vds) transition, so the actual CMRR can be 5–7 dB higher
-than this formula predicts in marginal-saturation conditions. Ensure
-adequate M6 Vds margin (> 50 mV) for the formula to be reliable.
+⚠️ **Accuracy note:** When the TAIL operates near the saturation
+boundary (|Vds| ≈ vdsat, margin < 50 mV), the OP-extracted `gds_eq_TAIL`
+is the tangent slope at one bias point and may overestimate the
+effective small-signal conductance seen by the AC CMRR measurement.
+The BSIM4 model uses a continuous gds(Vds) transition, so the actual
+CMRR can be 5–7 dB higher than this formula predicts in marginal-
+saturation conditions. Ensure adequate TAIL Vds margin (> 50 mV) for
+the formula to be reliable.
 
 **PSRR⁻ (VSS coupling, low frequency):**
 
@@ -303,34 +388,36 @@ M8 source/body at VSS. When VSS shifts, M8 Vds changes:
 A_VSS_M8 = gds8 / (gds7 + gds8)
 ```
 
-*Path 2 — M6 tail coupling (dominant when M6 is near triode):*
-M6 source at VSS. When VSS shifts, M6 Vds changes → ΔI_tail = gds6·ΔVSS.
-This common-mode perturbation leaks through the mirror mismatch
-(gds1 vs gm1) to net5, then is amplified by the second stage:
+*Path 2 — TAIL coupling (dominant when TAIL is near triode):*
+TAIL source at VSS. When VSS shifts, TAIL Vds changes →
+`ΔI_tail = gds_eq_TAIL · ΔVSS`. This common-mode perturbation leaks
+through the mirror mismatch (gds1 vs gm1) to net5, then is amplified
+by the second stage:
 ```
-A_VSS_M6 = [gds6 · gds1 · gm7] / [2·(gm1 + gds1)·(gds3 + gds1)·(gds7 + gds8)]
+A_VSS_TAIL = [gds_eq_TAIL · gds1 · gm7] / [2·(gm1 + gds1)·(gds3 + gds1)·(gds7 + gds8)]
 ```
 Simplified (gm1 >> gds1):
 ```
-A_VSS_M6 ≈ [gds6 · gds1 · gm7] / [2·gm1·(gds3 + gds1)·(gds7 + gds8)]
+A_VSS_TAIL ≈ [gds_eq_TAIL · gds1 · gm7] / [2·gm1·(gds3 + gds1)·(gds7 + gds8)]
 ```
 
-The M6 path dominates when gds6 is large (M6 near triode). For the
-design in this repo, the M6 path is typically 3–5× larger than M8.
+The TAIL path dominates when `gds_eq_TAIL` is large (TAIL near triode
+or un-cascoded).
 
 **Full PSRR⁻:**
 ```
-PSRR⁻ = A0 / (A_VSS_M8 + A_VSS_M6)
+PSRR⁻ = A0 / (A_VSS_M8 + A_VSS_TAIL)
 ```
 
 The legacy single-path formula `PSRR⁻ = gm3·gm7 / [(gds3+gds1)·gds8]`
-assumes the M6 path is negligible (valid only when gds6 << gds8, i.e.
-M6 is deep in saturation with Vds >> Vov). **Do not use the single-path
-formula when M6 Vds margin < 100 mV** — it overestimates PSRR⁻ by
-10–20 dB.
+assumes the TAIL path is negligible (valid only when
+`gds_eq_TAIL << gds8`, i.e. TAIL is deep in saturation or cascoded).
+**Do not use the single-path formula when TAIL Vds margin < 100 mV** —
+it overestimates PSRR⁻ by 10–20 dB.
 
-Improving PSRR⁻: increase L5 (= L6) to raise ro6, or increase VDS_M6
-headroom by raising gm/ID of the diff pair (reduces VGS_M3).
+Improving PSRR⁻: cascode the TAIL (boosts `ro_eq_TAIL` by
+`gm_tcas/gds_tcas`), increase L5 (= L6) to raise ro6, or increase the
+TAIL Vds headroom by raising gm/ID of the diff pair (reduces VGS_M3).
 
 **PSRR⁺ (VDD coupling, low frequency):**
 
@@ -400,7 +487,7 @@ outputs. The legacy formula underestimates PSRR⁺ by 20–25 dB.
 ### CM Input Range
 
 ```
-V_cm,min = Vov_M6 + VGS_M3 + VSS     (M6 saturation limit)
+V_cm,min = V_headroom_TAIL + VGS_M3 + VSS     (TAIL saturation limit)
 V_cm,max = VDD - |VSG_M1| + VTN       (M1 headroom limit)
 ```
 

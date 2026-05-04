@@ -201,7 +201,7 @@ def rewrite_lines(lines: List[str]) -> Tuple[List[str], Dict[str, List[MosLine]]
 
         if s.startswith("I0") and "CURRENT_0_BIAS" in s:
             rewritten.append(
-                s.replace("'CURRENT_0_BIAS'", "Ib").replace("CURRENT_0_BIAS", "Ib")
+                s.replace("'CURRENT_0_BIAS'", "IBIAS").replace("CURRENT_0_BIAS", "IBIAS")
             )
             continue
 

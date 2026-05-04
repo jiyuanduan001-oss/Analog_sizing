@@ -6,7 +6,7 @@ from CircuitCollector.utils.path import PROJECT_ROOT
 from CircuitCollector.utils.toml import load_toml
 
 # Setup paths
-base_config_path = PROJECT_ROOT / "config/skywater/opamp/tsm.toml"
+base_config_path = PROJECT_ROOT / "config/skywater/opamp/5tota_single.toml"
 config = load_toml(base_config_path)
 base_config = load_toml(base_config_path)
 circuit_type = base_config["type"]["name"]

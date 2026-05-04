@@ -103,12 +103,16 @@ DEFAULT_SPEC_LIST = [
     "vout_low",
     "vout_high",
     "output_swing",
+    # Mismatch (3-sigma offset from Monte Carlo)
+    "vos_mismatch_3sigma",
 ]
 
-# WL_ratio constraints from tsm.toml
+# WL_ratio constraints — lower bound removed (no minimum W/L needed;
+# CircuitCollector and the SKY130 PDK accept any valid width).
+# Upper bound kept to split wide devices into multiple fingers.
 _WL_RATIO_RANGE = {
-    "pfet": (3.7, 10.0),
-    "nfet": (2.8, 10.0),
+    "pfet": (0.0, 10.0),
+    "nfet": (0.0, 10.0),
 }
 
 
@@ -143,11 +147,11 @@ def _role_to_params(role: str, target: RoleTarget) -> dict:
 
     wl_min, wl_max = _WL_RATIO_RANGE[device]
 
-    # Diode-connected (BIAS_GEN): use minimum WL_ratio
+    # Diode-connected (BIAS_GEN): use a modest default W/L=1.0
     if gm_id is None or gm_id == 0:
         return {
             f"{prefix}_L":        round(L_um, 3),
-            f"{prefix}_WL_ratio": wl_min,
+            f"{prefix}_WL_ratio": 1.0,
             f"{prefix}_M":        1,
         }
 
@@ -337,7 +341,10 @@ def simulate_circuit(
     if supply_voltage is not None:
         merged_params["supply_voltage"] = supply_voltage
     if CL is not None:
-        merged_params["CL"] = CL
+        # CircuitCollector expects PARAM_CLOAD in picoFarads (the SPICE
+        # template appends a "p" suffix).  The public API of this function
+        # accepts CL in Farads (SI), so convert here.
+        merged_params["CL"] = CL * 1e12  # F → pF
 
     response = simulate(
         params=merged_params,

@@ -17,7 +17,7 @@ class SimRequest(BaseModel):
         "json_schema_extra": {
             "example": {
                 "params": {"M1_L": 0.15, "M1_WL_ratio": 3.7, "M1_M": 350},
-                "base_config_path": "config/skywater/opamp/tsm.toml",
+                "base_config_path": "config/skywater/opamp/5tota_single.toml",
                 "output_dir": "output/opamp/tsm",
                 "spec_list": ["dcgain_", "gain_bandwidth_product_", "phase_margin"]
             }
@@ -38,6 +38,15 @@ class RegisterCircuitRequest(BaseModel):
         "opamp",
         description="Circuit type category",
     )
+    extra_ports: Optional[Dict[str, float]] = Field(
+        None,
+        description=(
+            "Optional DC bias ports beyond (gnda, vdda, vinn, vinp, vout, Ib). "
+            "Mapping of port_name -> default DC voltage (V). Used for LV cascode "
+            "bias. The netlist.j2 subckt header and testbench will be extended "
+            "to declare and drive these ports."
+        ),
+    )
 
     model_config = {
         "json_schema_extra": {
@@ -45,6 +54,7 @@ class RegisterCircuitRequest(BaseModel):
                 "raw_netlist": ".subckt tco gnda vdda vinn vinp vout Ib\n...\n.ends tco",
                 "topology_name": "tco",
                 "circuit_type": "opamp",
+                "extra_ports": {"Vbias_cas_p": 0.6, "Vbias_cas_n": 1.2},
             }
         }
     }

@@ -1,0 +1,33 @@
+{
+  "params": {
+    "M1_L": 2.0,
+    "M1_WL_ratio": 10.0,
+    "M1_M": 1,
+    "M3_L": 4.0,
+    "M3_WL_ratio": 2.8,
+    "M3_M": 10,
+    "M4_L": 4.0,
+    "M4_WL_ratio": 2.8,
+    "M4_M": 1,
+    "M5_L": 2.7,
+    "M5_WL_ratio": 8.0,
+    "M5_M": 1,
+    "ibias": 2e-06
+  },
+  "specs": {
+    "dcgain_": 46.02496,
+    "gain_bandwidth_product_": 12791400.0,
+    "phase_margin": 75.84199,
+    "power": 38.58372,
+    "slew_rate_pos": 16689830.0,
+    "slew_rate_neg": -7520460.0,
+    "cmrr": 56.18771,
+    "dcpsrp": -43.4172,
+    "dcpsrn": -73.0013,
+    "gain_peaking_db": 0.0,
+    "true_gbw": 12791400.0,
+    "vout_low": 0.1187565,
+    "vout_high": 1.215204,
+    "output_swing": 1.096448
+  }
+}

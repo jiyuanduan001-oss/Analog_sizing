@@ -1,0 +1,4 @@
+gain_bandwidth_product_ = 1.012901e+08
+phase_margin = 2.740396e+01
+gain_peaking_db = 0.000000e+00
+true_gbw = 1.012901e+08

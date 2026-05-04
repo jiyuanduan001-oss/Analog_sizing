@@ -1,0 +1,51 @@
+{
+  "config_path": "config/skywater/opamp/5tota_lv_cascode.toml",
+  "requires_Cc": false,
+  "roles": [
+    "DIFF_PAIR",
+    "LOAD",
+    "LOAD_CAS",
+    "TAIL",
+    "BIAS_GEN"
+  ],
+  "role_device_map": {
+    "DIFF_PAIR": {
+      "primary": "M1",
+      "mirrors": [
+        "M2"
+      ],
+      "device_type": "nfet"
+    },
+    "LOAD": {
+      "primary": "M5",
+      "mirrors": [
+        "M6"
+      ],
+      "device_type": "pfet",
+      "sub_block_type": "lv_cascode"
+    },
+    "LOAD_CAS": {
+      "primary": "M7",
+      "mirrors": [
+        "M8"
+      ],
+      "device_type": "pfet",
+      "parent_role": "LOAD"
+    },
+    "TAIL": {
+      "primary": "M3",
+      "mirrors": [],
+      "device_type": "nfet",
+      "mirror_of": "BIAS_GEN"
+    },
+    "BIAS_GEN": {
+      "primary": "M4",
+      "mirrors": [],
+      "device_type": "nfet"
+    }
+  },
+  "passive_params": [],
+  "extra_ports": {
+    "Vbias_cas_p": 1.0
+  }
+}

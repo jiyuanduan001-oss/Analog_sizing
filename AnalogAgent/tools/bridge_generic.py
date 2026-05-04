@@ -14,17 +14,28 @@ from __future__ import annotations
 
 import dataclasses
 import math
+import warnings
 from typing import Optional
 
 from scripts.lut_lookup import lut_query
 from tools.bridge import RoleTarget, TransistorOP, parse_response, parse_specs
-from tools.api_client import simulate, DEFAULT_SPEC_LIST
+from tools.api_client import simulate, check_server, DEFAULT_SPEC_LIST
 
 
-# WL_ratio constraints (same as CircuitCollector conventions)
-_WL_RATIO_RANGE = {
-    "pfet": (3.7, 10.0),
-    "nfet": (2.8, 10.0),
+# WL_ratio upper bound — split wide devices into multiple fingers.
+# No lower bound on WL_ratio; PDK minimum width enforced separately.
+_WL_MAX = 10.0
+
+# Maximum width per finger (µm).  When the computed W exceeds this,
+# additional fingers are added so that each finger stays within the limit.
+# This matters for long-channel devices where WL_ratio is modest but
+# W = WL_ratio × L is large.
+_W_PER_FINGER_MAX_UM = 5.0
+
+# SKY130 PDK minimum device widths (µm).
+_W_MIN_UM = {
+    "pfet": 0.42,
+    "nfet": 0.42,
 }
 
 
@@ -32,6 +43,8 @@ def _role_to_params(
     prefix: str,
     device_type: str,
     target: RoleTarget,
+    corner: str = "tt",
+    temp: str = "25C",
 ) -> dict:
     """
     Convert one role's RoleTarget to CircuitCollector params for a single device.
@@ -40,6 +53,13 @@ def _role_to_params(
         prefix:      Device prefix, e.g. "M3"
         device_type: "nfet" or "pfet"
         target:      RoleTarget with sizing targets
+        corner:      Process corner for the LUT query (default "tt")
+        temp:        Temperature string for the LUT query, e.g. "27C"
+                     (default "25C"). Must match the temperature at which
+                     the circuit will be simulated — otherwise the LUT-
+                     derived W bakes in temperature coefficients that do
+                     not match the SPICE run and the OP point lands in
+                     the wrong inversion region.
 
     Returns:
         e.g. {"M3_L": 0.5, "M3_WL_ratio": 5.0, "M3_M": 1}
@@ -51,29 +71,38 @@ def _role_to_params(
     if L_um is None or id_a is None:
         return {}
 
-    wl_min, wl_max = _WL_RATIO_RANGE[device_type]
+    w_min = _W_MIN_UM[device_type]
+    wl_max = _WL_MAX
 
-    # No gm/ID target (e.g. mirror — just use minimum ratio)
+    # No gm/ID target (e.g. diode-connected bias device sized by mirror group).
+    # Use PDK minimum width so the device is physically valid.
     if gm_id is None or gm_id == 0:
         return {
             f"{prefix}_L":        round(L_um, 3),
-            f"{prefix}_WL_ratio": wl_min,
+            f"{prefix}_WL_ratio": round(w_min / L_um, 4),
             f"{prefix}_M":        1,
         }
 
-    # Compute W from LUT
+    # Compute W from LUT at the user-specified corner/temp.
     try:
-        id_w_ua_um = lut_query(device_type, "id_w", L_um, gm_id_val=gm_id)
+        id_w_ua_um = lut_query(
+            device_type, "id_w", L_um,
+            corner=corner, temp=temp, gm_id_val=gm_id,
+        )
         W_um = id_a * 1e6 / id_w_ua_um
-        WL_ratio = W_um / L_um
     except (FileNotFoundError, ValueError):
-        W_um = max(0.42, id_a * 1e6 / 50.0)
-        WL_ratio = W_um / L_um
+        W_um = id_a * 1e6 / 50.0
 
-    # Keep WL_ratio in range using M (finger multiplier)
-    M = max(1, math.ceil(WL_ratio / wl_max))
+    # Enforce PDK minimum width
+    W_um = max(w_min, W_um)
+    WL_ratio = W_um / L_um
+
+    # Split into multiple fingers if WL_ratio or W_per_finger exceeds bounds
+    M_wl = max(1, math.ceil(WL_ratio / wl_max))
+    W_per_finger = L_um * WL_ratio / M_wl
+    M_w = max(1, math.ceil(W_per_finger / _W_PER_FINGER_MAX_UM))
+    M = max(M_wl, M_w)
     WL_per_finger = WL_ratio / M
-    WL_per_finger = max(wl_min, WL_per_finger)
 
     return {
         f"{prefix}_L":        round(L_um, 3),
@@ -122,6 +151,8 @@ def sizing_result_to_params(
     Rc_ohm: Optional[float] = None,
     passive_params: Optional[list[str]] = None,
     l_overrides: Optional[dict[str, float]] = None,
+    corner: str = "tt",
+    temp: str = "25C",
 ) -> dict:
     """
     Convert a dict of RoleTargets to a flat CircuitCollector params dict.
@@ -137,6 +168,11 @@ def sizing_result_to_params(
         Rc_ohm:           Nulling resistor in Ohms (optional)
         passive_params:   List of passive param names from netlist (e.g. ["C1_value", "Rc_value"])
         l_overrides:      Optional {role: L_um} overrides
+        corner:           Process corner for LUT queries (default "tt").
+        temp:             Temperature string for LUT queries, e.g. "27C"
+                          (default "25C"). Should match the temperature
+                          at which the circuit will be simulated, so that
+                          the LUT-derived W and the SPICE OP point agree.
 
     Returns:
         Flat params dict for CircuitCollector
@@ -157,7 +193,8 @@ def sizing_result_to_params(
                 target = dataclasses.replace(target, L_guidance_um=l_overrides[role])
             mapping = role_device_map[role]
             params.update(_role_to_params(
-                mapping["primary"], mapping["device_type"], target
+                mapping["primary"], mapping["device_type"], target,
+                corner=corner, temp=temp,
             ))
         else:
             # Mirror group: first role is reference, others scale M
@@ -172,21 +209,28 @@ def sizing_result_to_params(
                 L_um = l_overrides.get(ref_role, L_um)
 
             device_type = ref_mapping["device_type"]
-            wl_min, wl_max = _WL_RATIO_RANGE[device_type]
+            w_min = _W_MIN_UM[device_type]
+            wl_max = _WL_MAX
 
             # Size the reference device
             gm_id_ref = ref_target.gm_id_target or 12.0
             id_ref = ref_target.id_derived
 
             try:
-                id_w = lut_query(device_type, "id_w", L_um, gm_id_val=gm_id_ref)
-                W_unit = id_ref * 1e6 / id_w
+                id_w = lut_query(
+                    device_type, "id_w", L_um,
+                    corner=corner, temp=temp, gm_id_val=gm_id_ref,
+                )
+                W_unit = max(w_min, id_ref * 1e6 / id_w)
                 WL_unit = W_unit / L_um
             except (FileNotFoundError, ValueError):
-                WL_unit = wl_min
+                WL_unit = w_min / L_um
 
-            M_ref = max(1, math.ceil(WL_unit / wl_max))
-            WL_per_finger = max(wl_min, WL_unit / M_ref)
+            M_ref_wl = max(1, math.ceil(WL_unit / wl_max))
+            W_per_finger = L_um * WL_unit / M_ref_wl
+            M_ref_w = max(1, math.ceil(W_per_finger / _W_PER_FINGER_MAX_UM))
+            M_ref = max(M_ref_wl, M_ref_w)
+            WL_per_finger = WL_unit / M_ref
 
             # Set reference device params
             ref_prefix = ref_mapping["primary"]
@@ -210,6 +254,26 @@ def sizing_result_to_params(
 
                 mirror_ratio = mirror_target.id_derived / id_ref
                 M_mirror = max(1, round(mirror_ratio * M_ref))
+
+                # Sanity check: if mirror ratio ≈ 1.0, the caller may have
+                # passed per-finger current instead of the total current the
+                # mirror role should carry.  E.g. TAIL mirrors BIAS_GEN and
+                # should carry M× more current; passing I_bias for both gives
+                # ratio = 1 and M_mirror = M_ref = 1 (wrong).
+                if (
+                    abs(mirror_ratio - 1.0) < 0.15
+                    and M_mirror == M_ref
+                    and M_ref <= 2
+                ):
+                    warnings.warn(
+                        f"Mirror ratio for '{mirror_role}' (mirrors '{ref_role}') "
+                        f"is ~1.0 (id_derived={mirror_target.id_derived:.2e} vs "
+                        f"ref={id_ref:.2e}) → M_{mirror_prefix} = {M_mirror}. "
+                        f"If '{mirror_role}' should carry more current than "
+                        f"'{ref_role}', ensure id_derived is the TOTAL current "
+                        f"for the role, not the per-finger current.",
+                        stacklevel=3,
+                    )
 
                 params.update({
                     f"{mirror_prefix}_L":        round(L_mirror, 3),
@@ -235,27 +299,57 @@ def simulate_circuit(
     temperature: Optional[float] = None,
     supply_voltage: Optional[float] = None,
     CL: Optional[float] = None,
+    extra_ports: Optional[dict] = None,
+    measure_mismatch: Optional[bool] = None,
     output_dir: Optional[str] = None,
 ) -> dict:
     """
     Send params to CircuitCollector and parse the response.
 
     Generic version — works with any topology given the config_path.
+
+    Args:
+        extra_ports: Optional {port_name: DC voltage} dict. Overrides the
+            [testbench.extra_ports] values baked into the TOML at
+            registration time. Use this to update LV-cascode bias
+            voltages (Vbias_cas_p / Vbias_cas_n) per-simulation as the
+            sizing changes their underlying vdsat/vth values, without
+            re-registering the topology.
     """
+    if not check_server():
+        raise RuntimeError("CircuitCollector not reachable at http://localhost:8001")
+
     merged = dict(params)
     if corner is not None:
-        merged["__corner__"] = corner
+        merged["corner"] = corner
     if temperature is not None:
-        merged["__temperature__"] = temperature
+        merged["temperature"] = temperature
     if supply_voltage is not None:
-        merged["__supply_voltage__"] = supply_voltage
+        merged["supply_voltage"] = supply_voltage
     if CL is not None:
-        merged["__CL__"] = CL
+        # CircuitCollector expects PARAM_CLOAD in picoFarads (the SPICE
+        # template appends a "p" suffix).  The public API of this function
+        # accepts CL in Farads (SI), so convert here.
+        merged["CL"] = CL * 1e12  # F → pF
+    if extra_ports is not None:
+        if not isinstance(extra_ports, dict):
+            raise TypeError(
+                f"extra_ports must be dict of {{port: voltage}}, "
+                f"got {type(extra_ports).__name__}"
+            )
+        merged["extra_ports"] = dict(extra_ports)
+    if measure_mismatch is not None:
+        merged["measure_mismatch"] = bool(measure_mismatch)
 
-    raw = simulate(
+    response = simulate(
         params=merged,
         base_config_path=config_path,
         spec_list=spec_list or DEFAULT_SPEC_LIST,
         output_dir=output_dir,
     )
-    return parse_response(raw)
+
+    return {
+        "specs": parse_specs(response),
+        "transistors": parse_response(response),
+        "raw_response": response,
+    }

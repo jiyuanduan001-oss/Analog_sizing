@@ -19,14 +19,14 @@ For EVERY transistor (skip entries with id=0, these are measurement probes):
 ```
 OP TABLE — Iteration <N>
 =========================
-Device  | gm/id | gm/gds | id(µA) | vds(V)  | vov(V)  | margin(V) | region
+Device  | gm/id | gm/gds | id(µA) | vds(V)  | vdsat(V) | margin(V) | region
 M1      | <>    | <>     | <>     | <>      | <>      | <>        | sat ✅ / linear ❌
 ...
 ```
 
 Where:
-- `vov = vgs - vth`
-- `margin = |vds| - |vov|` (positive = saturated)
+- `vdsat` from BSIM4 OP (positive magnitude — minimum |VDS| for saturation)
+- `margin = |vds| - vdsat` (positive = saturated)
 - Flag ❌ if `margin < 0` or `region != saturation`
 - Flag ⚠️ if `margin < 50mV`
 
@@ -40,6 +40,12 @@ Symmetry: |gm_M1 - gm_M2| / gm_M1 = <>%  [pass if < 1%]
 Compare SPICE results against the **Active Targets** from the validated
 spec form (Stage [1]). Only check specs that the user specified — inactive
 specs are reported but not checked.
+
+**Mismatch**: If the Mismatch spec was left blank in the spec form,
+mismatch is **completely disabled** — do not include `vos_mismatch_3sigma`
+in the pass/fail evaluation, do not report it, and do not diagnose it.
+Mismatch simulation (Monte Carlo) is slow and should only run when the
+user explicitly requested it with a numeric target value.
 
 ```
 SPEC COMPLIANCE — Iteration <N>

@@ -1,0 +1,4 @@
+vos_systematic = -9.28277e-04
+vos_mismatch_mean = -3.04222e-04
+vos_mismatch_sigma = 1.129561e-03
+vos_mismatch_3sigma = 3.388682e-03

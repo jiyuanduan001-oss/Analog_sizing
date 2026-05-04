@@ -1,0 +1,41 @@
+{
+  "config_path": "config/skywater/opamp/5tota_single.toml",
+  "requires_Cc": false,
+  "roles": [
+    "DIFF_PAIR",
+    "LOAD",
+    "TAIL",
+    "BIAS_GEN"
+  ],
+  "role_device_map": {
+    "DIFF_PAIR": {
+      "primary": "M1",
+      "mirrors": [
+        "M2"
+      ],
+      "device_type": "nfet"
+    },
+    "LOAD": {
+      "primary": "M5",
+      "mirrors": [
+        "M6"
+      ],
+      "device_type": "pfet",
+      "sub_block_type": "single"
+    },
+    "TAIL": {
+      "primary": "M3",
+      "mirrors": [],
+      "device_type": "nfet",
+      "mirror_of": "BIAS_GEN",
+      "sub_block_type": "single"
+    },
+    "BIAS_GEN": {
+      "primary": "M4",
+      "mirrors": [],
+      "device_type": "nfet"
+    }
+  },
+  "passive_params": [],
+  "extra_ports": {}
+}

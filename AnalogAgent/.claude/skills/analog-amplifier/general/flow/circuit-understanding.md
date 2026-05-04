@@ -20,9 +20,6 @@ the topology simulatable.
 |---|---|---|
 | Diff pair + mirror load, single output node | 5T OTA | `circuit-specific/5TOTA/` |
 | Diff pair + mirror load + CS stage + Miller cap | Two-Stage Miller (TSM) | `circuit-specific/tsm/` |
-| Diff pair + cascode output, same-type stack, no fold | Telescopic OTA (TCO) | `circuit-specific/telescopic/` |
-| Diff pair folded into opposite-type cascode output | Folded-Cascode OTA (FC-OTA) | `circuit-specific/folded cascode/` |
-| Complementary N+P diff pairs + gm-control + class-AB output | Rail-to-Rail Opamp (R2R) | `circuit-specific/rtr/` |
 
 ## Accepted Netlist Formats
 
@@ -102,6 +99,78 @@ Devices that must match exactly (same W, L, M) form a matched pair:
 Matched pairs share a single parameter prefix in the netlist template
 (e.g., both M1 and M2 use `{{ M1_L }}`, `{{ M1_W }}`, `{{ M1_M }}`).
 
+### Step 2b — Mirror/Load Sub-Block Detection (5T OTA and TSM only)
+
+Applies to roles that are current mirrors or active loads: `LOAD`, `TAIL`,
+`OUTPUT_BIAS`, `BIAS_GEN`. Each such role is realized as one of three
+sub-block types (see `general/knowledge/mirror-load-structures.md`):
+
+- `single`: one transistor (default, backward compatible)
+- `cascode`: two stacked transistors, both gates in the mirror/diode chain (self-biased)
+- `lv_cascode`: two stacked transistors, main.gate = cas.drain, cas.gate = external bias port
+
+Other topologies (e.g. telescopic, folded-cascode) may have dedicated
+cascode roles and would NOT be processed by this step.
+
+**Detection algorithm (per mirror/load role):**
+
+The algorithm is polarity- and role-agnostic. The "external output/signal
+node" is whichever net the sub-block drives:
+
+| Role | Rail | Output node |
+|------|------|-------------|
+| `LOAD` (PMOS)      | VDD | amplifier output (e.g. `vout`, `net5` in TSM) |
+| `OUTPUT_BIAS` (NMOS) | VSS | amplifier output |
+| `TAIL` (NMOS)      | VSS | diff-pair source node (e.g. `net2`) |
+| `BIAS_GEN` (NMOS)  | VSS | bias reference node |
+
+For each candidate main device `M_main` identified in Step 2:
+
+```
+Look for a device M_cas in the netlist such that:
+  - same type as M_main (both NMOS or both PMOS)
+  - M_cas.source == M_main.drain                    (stacked in series)
+  - M_cas.drain  == external output/signal node     (see table above)
+
+If no M_cas found:
+  → sub_block_type = "single"
+  → no cascode companion role created
+
+If M_cas found, inspect gate wiring:
+  if M_main.gate is in the mirror/diode chain
+     AND M_cas.gate is in the mirror/diode chain
+       → sub_block_type = "cascode"
+  elif M_main.gate == M_cas.drain (== output node)
+     AND M_cas.gate is a top-level subcircuit port
+       → sub_block_type = "lv_cascode"
+  else:
+       → ambiguous wiring. Stop and report to user.
+```
+
+**Example — NMOS lv_cascode TAIL:**
+
+```spice
+* Tail cascode pair (NMOS, rail = gnda = VSS):
+XM3  net2     net3          net_tmid  gnda  nfet_01v8  ← cas: drain=net2, source=net_tmid
+XM3m net_tmid Vbias_cas_n   gnda      gnda  nfet_01v8  ← main: drain=net_tmid, source=gnda
+```
+Here the roles are: TAIL primary = `M3m`, TAIL_CAS = `M3`; `extra_ports`
+emits `Vbias_cas_n`. Some netlists place the external-bias device as the
+top one (gate=port) and the bias-chain device at the bottom
+(gate=net3) — the Sooch signature `main.gate == cas.drain` still
+identifies the structure correctly regardless of which device is labelled
+`M3` vs `M3m`.
+
+If a cascode is detected, assign `M_cas` the role `<MAIN_ROLE>_CAS`
+(e.g., `LOAD_CAS`, `TAIL_CAS`). Record `sub_block_type` on the main role
+entry in the role_device_map. For `lv_cascode`, also record the external
+bias port name in a topology-level `extra_ports` field.
+
+**Important**: the companion `_CAS` role carries the same DC current as
+its parent but is **sized independently** (different gm/ID and L). It is
+NOT a current mirror of the parent; it is a series element. Do not add
+`mirror_of` on the `_CAS` role. See Step 4 below.
+
 ### Step 3 — Generate Parameterized Netlist
 
 Convert the user's netlist to a Jinja2-parameterized template. This is
@@ -109,9 +178,11 @@ the **netlist.j2** that CircuitCollector will use for simulation.
 
 **Rules:**
 
-1. **Subcircuit header**: Must be `.subckt {{netlist_name}} gnda vdda vinn vinp vout Ib`
+1. **Subcircuit header**: Must be `.subckt {{netlist_name}} gnda vdda vinn vinp vout Ib [extra_ports...]`
    - Port order: gnda, vdda, vinn, vinp, vout, Ib (fixed by testbench)
    - Add `Ib` if missing
+   - If any role has `sub_block_type == "lv_cascode"`, append its
+     external bias ports (e.g. `Vbias_cas_n`, `Vbias_cas_p`) at the end
    - Replace the original subcircuit name with `{{netlist_name}}`
 
 2. **MOSFETs**: Replace W/L/M with Jinja2 variables.
@@ -123,8 +194,15 @@ the **netlist.j2** that CircuitCollector will use for simulation.
    - If already parameterized (e.g., `{{ C1_value }}`), keep as-is.
    - If the netlist uses a named passive like `Rc`, use `{{ Rc_value }}`.
 
-4. **Bias current source**: Must use `Ib` as the current value.
-   - `I0 vdda net3 Ib`
+4. **Bias current source and `Ib` port**:
+   The testbench creates an external current *sink* at the `Ib` port
+   (`Ib Ib vss DC='IBIAS'` — current flows FROM Ib TO vss). The `Ib`
+   port is NOT a current source into the circuit. The subcircuit must
+   keep its own internal current source from vdda to the bias node.
+   - Quote the parameter reference for ngspice HSA compatibility:
+     `I0 vdda <bias_node> 'IBIAS'`
+   - Tie the `Ib` port to ground with a dummy resistor to prevent a
+     floating node: `Rdum_Ib Ib gnda 1`
 
 5. **Preserve topology**: Do NOT change device connections, node names,
    or circuit structure. Only parameterize the sizing values.
@@ -162,10 +240,18 @@ is used by the generic bridge for sizing conversion.
 ```python
 role_device_map = {
     "<ROLE_NAME>": {
-        "primary":     "<Mx>",         # Primary device prefix
-        "mirrors":     ["<My>", ...],   # TOML mosfet_pairs handles these
-        "device_type": "nfet"|"pfet",   # For LUT queries
-        "mirror_of":   "<ROLE_NAME>",   # (optional) if this role mirrors another
+        "primary":        "<Mx>",              # Primary device prefix
+        "mirrors":        ["<My>", ...],        # TOML mosfet_pairs handles these
+        "device_type":    "nfet"|"pfet",        # For LUT queries
+        "mirror_of":      "<ROLE_NAME>",        # (optional) current-mirror ref
+        "sub_block_type": "single"|"cascode"|"lv_cascode",  # (optional, mirror/load roles only)
+    },
+    # Cascode companion role (only present if sub_block_type != "single"):
+    "<ROLE_NAME>_CAS": {
+        "primary":      "<Mx>",
+        "mirrors":      ["<My>", ...],
+        "device_type":  "nfet"|"pfet",
+        "parent_role": "<ROLE_NAME>",           # marks this as a cascode companion
     },
     ...
 }
@@ -179,13 +265,22 @@ role_device_map = {
   shares per-finger W/L with the reference role, and uses M to set
   the current ratio. The generic bridge handles this automatically.
 - `device_type` is `"nfet"` or `"pfet"` based on the model string
+- `sub_block_type` records the detected mirror/load structure (default
+  `"single"`). Only applies to roles that are mirrors or active loads.
+- `parent_role` on a `_CAS` role identifies which main role this cascode
+  device belongs to. The `_CAS` role does NOT have `mirror_of` — it is
+  sized independently (same current, different gm/ID and L).
 
 **Also determine:**
 - `requires_Cc`: True if the netlist has a compensation capacitor
 - `passive_params`: List of passive parameter names found in the netlist
   (e.g., `["C1_value", "Rc_value"]`)
 - `topology_name`: Filesystem-safe identifier for registration
-  (e.g., `"tsm"`, `"5tota"`, `"tco"`, `"fc_ota"`, `"r2r"`)
+  (e.g., `"tsm"`, `"5tota"`)
+- `extra_ports`: List of additional subcircuit ports needed beyond the
+  standard `(gnda, vdda, vinn, vinp, vout, Ib)`. Required when any role
+  has `sub_block_type == "lv_cascode"` — add one port per LV cascode pair
+  (e.g. `["Vbias_cas_n"]` or `["Vbias_cas_n", "Vbias_cas_p"]`).
 
 ### Step 5 — Register Topology and Output
 
@@ -202,6 +297,7 @@ result = ensure_topology_registered(
     role_device_map=role_device_map,       # from Step 4
     requires_Cc=requires_Cc,
     passive_params=passive_params,
+    extra_ports=extra_ports,               # (optional) LV cascode bias ports
 )
 ```
 
@@ -220,6 +316,11 @@ Role-Device Map:
   <ROLE>  → <primary> [+ <mirrors>] (<device_type>) [mirrors <REF_ROLE>]
   ...
 
+Sub-block structures (mirror/load roles only):
+  <ROLE>  : single / cascode / lv_cascode  [→ companion <ROLE>_CAS → <Mx>]
+  ...
+
+Extra subcircuit ports: <list or "none">
 Passive params: <list or "none">
 
 Activated design flow: circuit-specific/<dir>/<name>-design-flow.md

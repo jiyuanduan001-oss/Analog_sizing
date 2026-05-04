@@ -64,6 +64,7 @@ class SimulationResultParser:
         noise_file: Union[str, Path] = None,
         slew_rate_file: Union[str, Path] = None,
         output_swing_file: Union[str, Path] = None,
+        mismatch_file: Union[str, Path] = None,
     ) -> Dict[str, float]:
         """
         Collect OpAmp simulation results from multiple files
@@ -76,6 +77,7 @@ class SimulationResultParser:
             noise_file: Path to noise measurement file
             slew_rate_file: Path to slew rate measurement file
             output_swing_file: Path to output swing measurement file
+            mismatch_file: Path to mismatch Monte Carlo measurement file
 
         Returns:
             Dict[str, float]: All simulation results in one dictionary
@@ -90,6 +92,7 @@ class SimulationResultParser:
         noise_results = self.parse_measurement_file(noise_file) if noise_file else {}
         slew_rate_results = self.parse_measurement_file(slew_rate_file) if slew_rate_file else {}
         output_swing_results = self.parse_measurement_file(output_swing_file) if output_swing_file else {}
+        mismatch_results = self.parse_measurement_file(mismatch_file) if mismatch_file else {}
         # Combine all results into one dictionary
         results.update(dc_results)
         results.update(ac_results)
@@ -98,6 +101,7 @@ class SimulationResultParser:
         results.update(noise_results)
         results.update(slew_rate_results)
         results.update(output_swing_results)
+        results.update(mismatch_results)
         return results
 
 
@@ -111,27 +115,17 @@ def parse_opamp_simulation_results(
     noise_file: Union[str, Path] = None,
     slew_rate_file: Union[str, Path] = None,
     output_swing_file: Union[str, Path] = None,
+    mismatch_file: Union[str, Path] = None,
 ) -> Dict[str, float]:
     """
     Convenience function to parse OpAmp simulation results
-
-    Args:
-        dc_file: Path to DC measurement file
-        ac_file: Path to AC measurement file
-        gbw_pm_file: Path to GBW/PM measurement file
-        op_region_file: Path to OP region measurement file
-        noise_file: Path to noise measurement file
-        slew_rate_file: Path to slew rate measurement file
-        output_swing_file: Path to output swing measurement file
-    Returns:
-        Dict[str, float]: All simulation results
     """
     parser = SimulationResultParser()
     is_valid = check_spice_log(log_file)
     if is_valid:
         return parser.collect_opamp_results(
             dc_file, ac_file, gbw_pm_file, op_region_file,
-            noise_file, slew_rate_file, output_swing_file,
+            noise_file, slew_rate_file, output_swing_file, mismatch_file,
         )
     else:
         print(

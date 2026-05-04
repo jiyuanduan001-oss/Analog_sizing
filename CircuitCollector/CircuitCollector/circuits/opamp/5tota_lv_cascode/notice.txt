@@ -1,0 +1,5 @@
+differential pair: M1, M2
+m3: M3
+m4: M4
+m5: M5, M6
+m7: M7, M8

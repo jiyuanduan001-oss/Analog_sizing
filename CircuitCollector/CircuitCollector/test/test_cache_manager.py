@@ -32,15 +32,15 @@ def test_table_name_generation():
     cm = CacheManager()
     
     # Test various circuit paths
-    assert cm._get_table_name("config/skywater/opamp/tsm.toml") == "skywater_opamp_tsm"
-    assert cm._get_table_name("config/skywater/opamp/5tota.toml") == "skywater_opamp_5tota"
+    assert cm._get_table_name("config/skywater/opamp/5tota_single.toml") == "skywater_opamp_5tota_single"
+    assert cm._get_table_name("config/skywater/opamp/5tota_single.toml") == "skywater_opamp_5tota_single"
     assert cm._get_table_name("config/skywater/ldo/ldo1.toml") == "skywater_ldo_ldo1"
 
 
 def test_table_creation():
     """Test that tables are created on demand."""
     cm = CacheManager()
-    circuit = "config/skywater/opamp/tsm.toml"
+    circuit = "config/skywater/opamp/5tota_single.toml"
     
     # Ensure table exists
     cm._ensure_table(circuit)
@@ -65,7 +65,7 @@ def test_key_generation():
     """Test canonical key generation."""
     cm = CacheManager()
     
-    circuit = "config/skywater/opamp/tsm.toml"
+    circuit = "config/skywater/opamp/5tota_single.toml"
     params1 = {"M1_L": 0.15, "M1_W": 0.5}
     params2 = {"M1_W": 0.5, "M1_L": 0.15}  # Same params, different order
     
@@ -85,7 +85,7 @@ def test_cache_set_get():
     """Test basic cache set and get operations."""
     cm = CacheManager()
     
-    circuit = "config/skywater/opamp/tsm.toml"
+    circuit = "config/skywater/opamp/5tota_single.toml"
     params = {"M1_L": 0.15, "M1_W": 0.5}
     value = {
         "circuit": circuit,

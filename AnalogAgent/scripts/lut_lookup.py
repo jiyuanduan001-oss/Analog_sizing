@@ -2,24 +2,32 @@
 LUT lookup utilities for gm/Id characterization data.
 
 Processed LUT files live under:
-    assets/{device}/{corner}/{temp}/processed/gmid_{device}_L{l_nm}n.txt
+    asset_new/{device}/{corner}/{temp}/processed/gmid_{device}_L{l_nm}n.txt
 
 Each .txt file is space-separated with ``#``-prefixed comment headers and
-eight data columns:
+eleven data columns:
 
     gm/id [1/V]  gm/gds [V/V]  id/W [A/m]  ft [Hz]
-    Cgg/W [F/m]  Cgd/W [F/m]  Cgs/W [F/m]  Vov [V]
+    Cgg/W [F/m]  Cgd/W [F/m]  Cgs/W [F/m]  Cdb/W [F/m]
+    vgs [V]      vth [V]      vdsat [V]
 
 The DataFrame returned by :func:`load_lut` uses these clean column names:
 
-    gm_id   gm_gds   id_w   ft   cgg_w   cgd_w   cgs_w   vov
+    gm_id  gm_gds  id_w  ft  cgg_w  cgd_w  cgs_w  cdb_w  vgs  vth  vdsat
 
 Unit notes (backward-compatible with bridge code):
     * id_w  – stored A/m, numerically identical to µA/µm (1 A/m = 1 µA/µm)
-    * cgg_w, cgd_w, cgs_w – stored F/m, kept as-is (bridges can convert)
+    * cgg_w, cgd_w, cgs_w, cdb_w – stored F/m, kept as-is
     * ft    – stored Hz, kept as-is
     * gm_gds – stored directly (no inversion needed)
-    * vov   – overdrive voltage in V
+    * vgs, vth, vdsat – V (vth and vdsat are positive magnitudes for both
+      polarities; ngspice convention)
+
+`vdsat` is the BSIM4 internal saturation voltage (|VDS|_sat including
+velocity-saturation / short-channel effects). It is the canonical quantity
+for all headroom, saturation-margin, and cascode-bias calculations. The
+LUT does not carry a square-law overdrive column — `vdsat`, `vth`, and
+`vgs` are the only voltage axes exposed.
 
 Filename convention:
     gmid_{device}_L{l_nm}n.txt   e.g. gmid_nfet_01v8_L180n.txt
@@ -27,6 +35,11 @@ Filename convention:
 Device naming:
     Accepts 'nfet', 'pfet', 'nfet_01v8', 'pfet_01v8'.
     Short forms are mapped to their full PDK names automatically.
+
+Available reference temperatures (post-migration to asset_new):
+    -40C, 25C, 85C  per corner (5 corners: tt, ff, ss, fs, sf).
+First-order linear interpolation between bracketing reference temperatures
+is performed automatically by load_lut() for any in-range target temp.
 """
 
 import pandas as pd
@@ -39,7 +52,7 @@ from typing import List, Optional, Union
 # Paths & constants
 # ---------------------------------------------------------------------------
 
-ASSETS_DIR = Path(__file__).parent.parent / "assets"
+ASSETS_DIR = Path(__file__).parent.parent / "asset_new"
 
 # Short-name → full PDK folder name
 _DEVICE_MAP = {
@@ -49,8 +62,11 @@ _DEVICE_MAP = {
     "pfet_01v8": "pfet_01v8",
 }
 
-# Raw file column order → clean Python names
-_RAW_COLUMNS = ["gm_id", "gm_gds", "id_w", "ft", "cgg_w", "cgd_w", "cgs_w", "vov"]
+# Raw file column order → clean Python names (matches asset_new processed LUT
+# header: gm/id  gm/gds  id/W  ft  Cgg/W  Cgd/W  Cgs/W  Cdb/W  vgs  vth  vdsat)
+_RAW_COLUMNS = ["gm_id", "gm_gds", "id_w", "ft",
+                "cgg_w", "cgd_w", "cgs_w", "cdb_w",
+                "vgs",   "vth",   "vdsat"]
 
 # Metrics that lut_query supports
 _VALID_METRICS = set(_RAW_COLUMNS)
@@ -114,6 +130,54 @@ def _load_processed_file(fpath: Path) -> pd.DataFrame:
     )
 
 
+def _trim_to_strong_inversion(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Drop the sub-threshold branch so gm_id is monotonic across the table.
+
+    Raw processed LUTs sweep VGS across the full range. gm/Id is not
+    monotonic in VGS: it rises from a low value in strong inversion
+    toward a peak (~25–30 S/A) at the onset of weak inversion, then
+    falls again as the device enters deep sub-threshold. The two sides
+    of the peak are therefore two physical branches sharing the same
+    gm/Id axis:
+
+      * strong-inversion side — large Id/W (usable for sizing)
+      * sub-threshold side    — Id/W → 0       (unusable, but present
+                                                 in the raw table)
+
+    np.interp on the full table silently lands on whichever side happens
+    to bracket the query. For the SKY130 25 °C NFET at gm/Id = 13 the
+    sub-threshold row (Id/W ≈ 6e-7) bracketed the query and the lookup
+    returned Id/W ≈ 0.18 A/m instead of the physically-correct
+    ≈ 0.80 A/m — a ~4.6× sizing error.
+
+    This function locates the peak and returns only the strong-inversion
+    branch. Which side of the peak that is depends on the sweep
+    direction (NFET sweeps VGS 0→+, PFET sweeps VGS −→0), so we pick
+    the half whose far end has the larger Id/W — that is the physical
+    strong-inversion branch regardless of polarity.
+    """
+    if df.empty or "gm_id" not in df.columns or "id_w" not in df.columns:
+        return df
+
+    peak_idx = int(df["gm_id"].idxmax())
+    if peak_idx == 0 or peak_idx == len(df) - 1:
+        # Table already monotonic in gm_id (no sub-threshold branch present).
+        return df.reset_index(drop=True)
+
+    left  = df.iloc[: peak_idx + 1]   # includes peak
+    right = df.iloc[peak_idx:]        # includes peak
+
+    # The strong-inversion branch is the side whose far endpoint has
+    # larger Id/W. Using the endpoints (not means) keeps the rule
+    # robust to sub-threshold tails that may contain near-zero rows.
+    left_far_idw  = abs(left["id_w"].iloc[0])
+    right_far_idw = abs(right["id_w"].iloc[-1])
+
+    chosen = right if right_far_idw >= left_far_idw else left
+    return chosen.reset_index(drop=True)
+
+
 def _interpolate_lut(
     device: str,
     l_nm: int,
@@ -148,6 +212,14 @@ def _interpolate_lut(
     df_lo = _load_processed_file(f_lo)
     df_hi = _load_processed_file(f_hi)
 
+    # Trim each source to its strong-inversion branch before row-wise blending.
+    # The sub-threshold tail varies strongly with temperature and contains a
+    # non-monotonic gm_id axis — blending it row-by-row produces garbage.
+    # Trimming first aligns both tables at their gm_id peak, so row-index
+    # blending mixes comparable operating points.
+    df_lo = _trim_to_strong_inversion(df_lo)
+    df_hi = _trim_to_strong_inversion(df_hi)
+
     # Align to the shorter table (same VGS sweep expected)
     n = min(len(df_lo), len(df_hi))
     df_lo = df_lo.iloc[:n].reset_index(drop=True)
@@ -177,25 +249,30 @@ def load_lut(
         device:  Device name — 'nfet', 'pfet', 'nfet_01v8', or 'pfet_01v8'.
         l_nm:    Channel length in nanometers (integer, e.g. 180).
         corner:  Process corner — 'tt', 'ff', 'ss', 'fs', 'sf'.
-        temp:    Temperature string — '0C', '25C', '75C', etc.
+        temp:    Temperature string — '-40C', '25C', '85C' (reference
+                 temps). Other in-range values are linearly interpolated.
 
     Returns:
         DataFrame with columns:
-            gm_id, gm_gds, id_w, ft, cgg_w, cgd_w, cgs_w, vov
+            gm_id, gm_gds, id_w, ft, cgg_w, cgd_w, cgs_w, cdb_w,
+            vgs, vth, vdsat
     """
     canonical = _resolve_device(device)
     directory = _lut_dir(canonical, corner, temp)
     fname = directory / f"gmid_{canonical}_L{l_nm}n.txt"
 
     if fname.exists():
-        # Exact temperature file found — load directly
-        return pd.read_csv(
+        # Exact temperature file found — load directly, then drop the
+        # sub-threshold branch so gm_id is monotonic (see
+        # _trim_to_strong_inversion for the full rationale).
+        df = pd.read_csv(
             fname,
             sep=r"\s+",
             comment="#",
             header=None,
             names=_RAW_COLUMNS,
         )
+        return _trim_to_strong_inversion(df)
 
     # --- Auto-interpolation fallback ---
     target_c = _parse_temp(temp)
@@ -249,7 +326,9 @@ def lut_query(
     Args:
         device:     'nfet', 'pfet', 'nfet_01v8', or 'pfet_01v8'.
         metric:     Column to retrieve.  One of:
-                        gm_id, gm_gds, id_w, ft, cgg_w, cgd_w, cgs_w, vov
+                        gm_id, gm_gds, id_w, ft,
+                        cgg_w, cgd_w, cgs_w, cdb_w,
+                        vgs, vth, vdsat
         L:          Channel length in **micrometers** (e.g. 0.18 for 180 nm).
                     Converted to nm internally for the filename lookup.
         corner:     Process corner (default 'tt').
@@ -374,7 +453,9 @@ def lookup_by_gmid(
         l_nm:    Channel length in nm.
         gm_id:   Target gm/Id ratio (1/V).
         col:     Column name — one of the clean names:
-                    gm_id, gm_gds, id_w, ft, cgg_w, cgd_w, cgs_w, vov
+                    gm_id, gm_gds, id_w, ft,
+                    cgg_w, cgd_w, cgs_w, cdb_w,
+                    vgs, vth, vdsat
         corner:  Process corner (default 'tt').
         temp:    Temperature (default '25C').
     """
@@ -454,19 +535,23 @@ def _cli_main():
     )
     parser.add_argument(
         "--temp", type=str, default="25C",
-        help="Temperature: 0C, 25C, 75C, etc. (default: 25C)",
+        help="Temperature: -40C, 25C, 85C (reference temps; others are "
+             "interpolated). Default: 25C.",
     )
     args = parser.parse_args()
 
     _UNITS = {
-        "id_w": "A/m",
+        "id_w":  "A/m",
         "gm_gds": "V/V",
-        "gm_id": "1/V",
+        "gm_id":  "1/V",
         "cgg_w": "F/m",
         "cgd_w": "F/m",
         "cgs_w": "F/m",
-        "ft": "Hz",
-        "vov": "V",
+        "cdb_w": "F/m",
+        "ft":    "Hz",
+        "vgs":   "V",
+        "vth":   "V",
+        "vdsat": "V",
     }
     unit = _UNITS.get(args.metric, "")
 

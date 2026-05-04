@@ -22,17 +22,17 @@ this skill maps each failure to its root cause and recommends a fix.
 
 ### M6 (TAIL) in linear region
 
-Most common failure. VDS_M6 = V_cm - VGS_M3 - VSS must exceed Vov_M6.
+Most common failure. VDS_M6 = V_cm - VGS_M3 - VSS must exceed Vdsat_M6.
 
 ```
-Root cause: VDS_M6 < Vov_M6
+Root cause: VDS_M6 < Vdsat_M6
   Mechanism: I_tail/I_bias mirror ratio too high → VGS_M6 large → VDS compressed
   OR: V_cm too low for the stack height
 
 Fix priority:
   1. Reduce VGS(DIFF_PAIR) by increasing gm/ID of DIFF_PAIR (M3, M4)
      ⚠️ Side effect: larger input pair, more parasitic cap
-  2. Increase gm/ID of TAIL → reduces Vov_M6
+  2. Increase gm/ID of TAIL → reduces Vdsat_M6
      ⚠️ Side effect: larger device area
   3. Increase I_bias to reduce mirror ratio (target ratio ≤ 8:1)
   4. If all fail: topology may not support these specs at this VDD
@@ -41,24 +41,24 @@ Fix priority:
 ### M7 (OUTPUT_CS) in linear region
 
 ```
-Root cause: VDD - V_out < |Vov_M7|
-  Mechanism: V_out,max spec too close to VDD for M7's |Vov|
+Root cause: VDD - V_out < Vdsat_M7
+  Mechanism: V_out,max spec too close to VDD for M7's Vdsat
 
 Fix:
-  1. Increase W7 (reduces |Vov| at same ID7)
+  1. Increase W7 (reduces Vdsat at same ID7)
      ⚠️ Side effect: larger Cgs7, slower p4
-  2. Increase gm/ID of OUTPUT_CS (weaker inversion, lower |Vov|)
+  2. Increase gm/ID of OUTPUT_CS (weaker inversion, lower Vdsat)
   3. Reduce ID7 (but check PM — lower gm7 → lower p2)
 ```
 
 ### M8 (OUTPUT_BIAS) in linear region
 
 ```
-Root cause: V_out < Vov_M8
-  Mechanism: V_out,min spec too aggressive for M8's Vov
+Root cause: V_out < Vdsat_M8
+  Mechanism: V_out,min spec too aggressive for M8's Vdsat
 
 Fix:
-  1. Increase W8 (reduces Vov at same ID8)
+  1. Increase W8 (reduces Vdsat at same ID8)
      This means increasing W5 (shared unit-cell W/L)
   2. Reduce ID7 (= ID8)
   3. Relax V_out,min spec
@@ -112,10 +112,7 @@ Side effects of fixing gain:
 GBW < GBW_target   (GBW = gm3/(2π·Cc))
     │
     ├── gm3 too low
-    │   → Increase I_tail (raises gm3 = (gm/ID)_3 × I_tail/2)
-    │   ⚠️ Side effect: more power
-    │   → Or decrease gm/ID (stronger inversion → higher gm per µA)
-    │   ⚠️ Side effect: less gm per current → need more power
+    │   → Increase I_tail to get larger gm3 (Especially when there is power margin available. )
     │
     ├── Cc too large
     │   → Reduce Cc (but verify PM still meets target)
@@ -163,7 +160,7 @@ PM < PM_target
 SR+ and SR- are separate specs:
 ```
 SR+ = I_tail / Cc
-SR- = min(I_tail / Cc, ID7 / (Cc + CTL))
+SR- = min(I_tail / Cc, ID7 / CTL)
 ```
 
 ```
@@ -181,9 +178,9 @@ SR- < SR-_target   (identify which term limits min())
     │   → Or reduce Cc (but check PM)
     │   ⚠️ Side effect: more power
     │
-    └── Limited by ID7/(Cc+CTL) (2nd stage too slow)
+    └── Limited by ID7/CTL (2nd stage too slow)
         → Increase ID7
-        → Or reduce Cc or CL (CL usually fixed)
+        → Or reduce CL (usually fixed)
         ⚠️ Side effect: more power
 ```
 
@@ -192,12 +189,12 @@ SR- < SR-_target   (identify which term limits min())
 ## Fault Tree: Output Swing Too Low
 
 ```
-V_swing = VDD - |Vov_M7| - Vov_M8 < Swing_target
+V_swing = VDD - Vdsat_M7 - Vdsat_M8 < Swing_target
     │
-    ├── |Vov_M7| too large → increase gm/ID of OUTPUT_CS (weaker inversion)
+    ├── Vdsat_M7 too large → increase gm/ID of OUTPUT_CS (weaker inversion)
     │   ⚠️ Side effect: lower ft, larger W7
     │
-    └── Vov_M8 too large → increase gm/ID of bias mirrors (weaker inversion)
+    └── Vdsat_M8 too large → increase gm/ID of bias mirrors (weaker inversion)
         This means increasing W5 (shared unit-cell), which increases W8
         ⚠️ Side effect: larger device area
 ```
@@ -311,6 +308,90 @@ Integrated noise too high
         → Increase W3 × L3 (more input pair area)
         → Check load contribution: if (Kf_p·µn·W3·L3)/(Kf_n·µp·W1·L1) > 0.5,
           load noise is significant → increase L1
+```
+
+---
+
+## Fault Tree: Cascode / LV Cascode Sub-Block Issues
+
+Applies only when LOAD or OUTPUT_BIAS uses `sub_block_type = "cascode"` or
+`"lv_cascode"` (see `general/knowledge/mirror-load-structures.md`).
+
+### Internal pole too low → degrades PM
+
+```
+p_int_LOAD  = gm_loadcas / C_int_LOAD  < 3·ω_c
+p_int_OBIAS = gm_obcas   / C_int_OBIAS < 3·ω_c
+    │
+    ├── Reduce L_cas (already at L_min? skip)
+    │     → smaller C_int → higher p_int
+    │
+    └── Increase gm_cas
+        → Lower (gm/ID)_cas to 8 S/A
+        ⚠️ Bigger Vdsat_cas → more headroom consumed
+```
+
+### 1st- or 2nd-stage gain low despite cascode
+
+```
+A_v1 = gm3 / (gds3 + gds_eq_LOAD)  below target
+  OR
+A_v2 = gm7 / (gds7 + gds_eq_OBIAS) below target
+    │
+    ├── gds_eq too high because main gds (gds1 or gds8) dominant
+    │     → Increase L1 (or L5 for OUTPUT_BIAS) to reduce main gds
+    │
+    ├── gds_eq too high because cascode gm_gds low
+    │     → Increase L_cas (longer cascode → higher gm_gds_cas)
+    │     ⚠️ Verify p_int still > 3·ω_c
+    │
+    └── gds3 or gds7 (input-side) dominant
+        → Standard gain fix: increase L3 or L7
+```
+
+### PM degraded by cascode internal pole
+
+```
+arctan(ω_c / p_int_*) eats > 15° of PM
+    │
+    └── Same fixes as "internal pole too low" above.
+        If already at gm/ID = 8 and L_min, can't fix further:
+          → Increase Cc (moves ω_c down, recovers PM)
+          → Or accept the PM loss if still above target
+```
+
+### Headroom violation → consider lv_cascode
+
+```
+If output stage hits saturation limit at either end:
+  Regular cascode headroom = vdsat_main + Vgs_cas (≈ Vth + 2·vdsat)
+  LV cascode headroom      ≈ 2·vdsat (better)
+
+Fix: rewire the netlist to the LV cascode pattern and add external bias.
+Requires netlist change — may need user intervention.
+```
+
+---
+
+## Fault Tree: Mismatch Too High
+
+Only applies when Mismatch is an active target (user provided a number).
+
+Mismatch is dominated by Pelgrom threshold mismatch: `σ(ΔVth) = A_VT / √(W × L)`.
+Both the input pair and load pair contribute.
+
+**Two fixes only — do not overcomplicate:**
+
+```
+Mismatch_3sigma > Mismatch_target
+    │
+    ├── Fix 1: Increase W and L (increase transistor area)
+    │   Identify the pair with the smaller W×L product (diff pair or load).
+    │   Increase both W and L for the bottleneck pair.
+    │
+    └── Fix 2: Reduce |Vdsat| (push toward weaker inversion)
+        Higher gm/ID → lower id_w → wider W at same current → more area.
+        Also reduces VGS, improving headroom for stacked devices.
 ```
 
 ---

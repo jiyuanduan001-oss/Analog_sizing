@@ -37,6 +37,8 @@ DEFAULT_SPEC_LIST = [
     # Gain-plateau detection
     "gain_peaking_db",
     "true_gbw",
+    # Mismatch (3-sigma offset from Monte Carlo)
+    "vos_mismatch_3sigma",
 ]
 
 
@@ -64,7 +66,8 @@ def simulate(
           "specs":     {spec_name: float, ...},
           "op_region": {
               "m1": {"gm": ..., "Id": ..., "gm/Id": "...", "vds": ...,
-                     "vdsat": ..., "sat_margin": ..., "vgs": ..., "vov": ...},
+                     "vdsat": ..., "vgs": ..., "vth": ...,
+                     "cgs": ..., "cgd": ..., "gds": ...},
               ...
           },
           "logs": str | None,
@@ -89,6 +92,7 @@ def register_circuit(
     raw_netlist: str,
     topology_name: str,
     circuit_type: str = "opamp",
+    extra_ports: dict | None = None,
     timeout: int = 30,
 ) -> dict:
     """
@@ -102,6 +106,11 @@ def register_circuit(
         raw_netlist:    Full .subckt text (Jinja2-parameterized or MOSFET_<n> format)
         topology_name:  Filesystem-safe identifier (e.g. 'tco', 'fc_ota')
         circuit_type:   Circuit category (default: 'opamp')
+        extra_ports:    Optional mapping of port_name -> DC voltage (V) for
+                        additional subcircuit ports beyond the standard set
+                        (gnda, vdda, vinn, vinp, vout, Ib). Used for LV cascode
+                        bias voltages. The server extends the .subckt header
+                        and testbench templates to declare and drive each port.
         timeout:        Request timeout in seconds
 
     Returns:
@@ -115,6 +124,8 @@ def register_circuit(
         "topology_name": topology_name,
         "circuit_type": circuit_type,
     }
+    if extra_ports:
+        payload["extra_ports"] = extra_ports
     resp = requests.post(
         f"{BASE_URL}/register_circuit/", json=payload, timeout=timeout
     )

@@ -9,7 +9,7 @@ Responsibilities:
   5. simulate_circuit()        -- convenience wrapper around api_client.simulate()
 
 ROLE_DEVICE_MAP is topology-specific. The default below is for a 5T OTA
-(SKILL.md Netlist Role Mapping: M1/M2=DIFF_PAIR, M5/M6=LOAD, M3=TAIL, M4=BIAS_REF).
+(SKILL.md Netlist Role Mapping: M1/M2=DIFF_PAIR, M5/M6=LOAD, M3=TAIL, M4=BIAS_GEN).
 If using a different circuit (e.g. tsm with M1-M8), update ROLE_DEVICE_MAP
 or pass a custom map.
 
@@ -21,6 +21,7 @@ Cgg = |cgs_m1| + |cgd_m1|  ->  extracted and stored in TransistorOP.cgg
 
 import dataclasses
 import math
+import re
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -106,7 +107,7 @@ ROLE_DEVICE_MAP: dict[str, dict] = {
         "mirrors":     [],
         "device_type": "nfet",
     },
-    "BIAS_REF": {
+    "BIAS_GEN": {
         "primary":     "M4",
         "mirrors":     [],
         "device_type": "nfet",
@@ -147,6 +148,8 @@ DEFAULT_SPEC_LIST = [
     # Gain-plateau detection
     "gain_peaking_db",
     "true_gbw",
+    # Mismatch (3-sigma offset from Monte Carlo)
+    "vos_mismatch_3sigma",
 ]
 
 
@@ -182,7 +185,7 @@ def role_target_to_params(
     if L_um is None or id_a is None:
         return {}
 
-    # BIAS_REF (M4): diode-connected, no independent gm/Id target.
+    # BIAS_GEN (M4): diode-connected, no independent gm/Id target.
     # Use the L from sizing and match WL_ratio to TAIL if gm_id == 0.
     if gm_id is None or gm_id == 0:
         # Default WL_ratio = 2.8 (5tota minimum) -- toolchain will handle current
@@ -254,15 +257,15 @@ def sizing_result_to_params(
             target = dataclasses.replace(target, L_guidance_um=l_overrides[role])
         params.update(role_target_to_params(role, target))
 
-    # TAIL (M3) + BIAS_REF (M4): size as a current mirror pair.
+    # TAIL (M3) + BIAS_GEN (M4): size as a current mirror pair.
     # M3 and M4 must share identical per-finger W/L so that the mirrored VGS
     # maps to the correct I_tail.  The ratio is implemented via M (finger count).
     tail   = sizing_result.roles.get("TAIL")
-    bias   = sizing_result.roles.get("BIAS_REF")
+    bias   = sizing_result.roles.get("BIAS_GEN")
     if tail and bias and tail.id_derived and bias.id_derived:
         L_um = tail.L_guidance_um or 1.0
         if l_overrides:
-            L_um = l_overrides.get("TAIL", l_overrides.get("BIAS_REF", L_um))
+            L_um = l_overrides.get("TAIL", l_overrides.get("BIAS_GEN", L_um))
 
         gm_id  = tail.gm_id_target or 11.0
         id_ref = bias.id_derived    # Ib  -- unit cell current (M4 carries this)
@@ -294,7 +297,7 @@ def sizing_result_to_params(
             "M3_M":        M3,
         })
     elif tail:
-        # Fallback: process individually if BIAS_REF missing
+        # Fallback: process individually if BIAS_GEN missing
         target = tail
         if l_overrides and "TAIL" in l_overrides:
             target = dataclasses.replace(target, L_guidance_um=l_overrides["TAIL"])
@@ -307,30 +310,45 @@ def sizing_result_to_params(
 # 2. CircuitCollector response -> TransistorOP dict
 # ---------------------------------------------------------------------------
 
-def _infer_region(vov: Optional[float], sat_margin: Optional[float]) -> str:
+def _infer_region(
+    vds: Optional[float],
+    vdsat: Optional[float],
+    vgs: Optional[float] = None,
+    vth: Optional[float] = None,
+    id_val: Optional[float] = None,
+) -> str:
     """
-    Infer operating region from vov (= vgs - vth) and sat_margin (= vds - vdsat).
+    Infer operating region from a SPICE OP point using polarity-agnostic
+    magnitude comparisons. All inputs are signed quantities from the
+    CircuitCollector op_region dict.
 
-    Convention:
-      NFET: vov > 0 when on, sat_margin > 0 in saturation
-      PFET: vov < 0 when on, sat_margin < 0 in saturation
-      Both: |vov| < 0.05 V -> subthreshold
+    Decision rules (polarity-free):
+      saturation   iff  |vds| ≥ |vdsat| − 50 mV
+      subthreshold iff  vth available AND |vgs − vth_signed| < 50 mV
+                        (vth_signed is recovered using id sign as polarity hint:
+                         id ≥ 0 ⇒ nfet, vth_signed = +|vth|;
+                         id < 0 ⇒ pfet, vth_signed = −|vth|)
+      linear       otherwise.
+
+    The 50 mV margin matches the legacy heuristic. Region 'unknown' is
+    returned only when no usable inputs are available.
     """
-    if vov is None:
-        return "unknown"
+    # Prefer the saturation check (it's the most actionable result for sizing).
+    if vds is not None and vdsat is not None:
+        margin = abs(vds) - abs(vdsat)
+        sat = margin >= -0.05
 
-    if abs(vov) < 0.05:
-        return "subthreshold"
+        # Optional subthreshold refinement: only if we have vth and the
+        # device is below the inversion knee.
+        if vgs is not None and vth is not None:
+            polarity = 'n' if (id_val is None or id_val >= 0) else 'p'
+            vth_signed = abs(vth) if polarity == 'n' else -abs(vth)
+            if abs(vgs - vth_signed) < 0.05:
+                return "subthreshold"
+        return "saturation" if sat else "linear"
 
-    if sat_margin is None:
-        return "saturation"   # default if sat_margin not available
-
-    # NFET: positive vov, sat_margin > 0 = saturation
-    if vov > 0:
-        return "saturation" if sat_margin >= -0.05 else "linear"
-    # PFET: negative vov, sat_margin < 0 = saturation
-    else:
-        return "saturation" if sat_margin <= 0.05 else "linear"
+    # Fallback when sat_margin inputs missing
+    return "unknown"
 
 
 def parse_response(response: dict) -> dict[str, TransistorOP]:
@@ -339,8 +357,11 @@ def parse_response(response: dict) -> dict[str, TransistorOP]:
 
     CircuitCollector op_region format (from _format_op_region in sim_api.py):
       - Keys: lowercase device names  e.g. "m1", "m3"
-      - Fields: gm, Id (capital I), gm/Id (str), vds, vdsat, sat_margin, vgs, vov
-      - NOT included: gds, vth (must be pulled from "raw")
+      - Fields read here: gm, Id (capital I), vds, vdsat, vgs, vth, gds,
+                          cgs, cgd  (region is inferred locally from
+                          |vds| vs |vdsat|)
+      - NOT included historically: gds, vth (now returned in op_region;
+        raw dict is still consulted as fallback for older sims)
 
     CircuitCollector raw format:
       - Keys like "gm_m1", "gds_m1", "vth_m1", "id_m1", ...
@@ -357,8 +378,10 @@ def parse_response(response: dict) -> dict[str, TransistorOP]:
     transistors: dict[str, TransistorOP] = {}
 
     for dev_lower, data in op_region.items():
-        # Skip capacitors (C*) and resistors
-        if dev_lower.startswith("c") or dev_lower.startswith("r"):
+        # Only accept actual MOSFET names (m followed by a digit, e.g. m1, m3)
+        # Skip measurement artifacts (gain, peaking_db, gbw, etc.) that leak
+        # through _format_op_region when spec keys contain underscores.
+        if not re.match(r'^m\d', dev_lower):
             continue
 
         name = dev_lower.upper()   # m1 -> M1
@@ -368,18 +391,13 @@ def parse_response(response: dict) -> dict[str, TransistorOP]:
         vgs      = data.get("vgs") or 0.0
         vds      = data.get("vds") or 0.0
         vdsat    = data.get("vdsat") or 0.0
-        vov      = data.get("vov")
-        sat_margin = data.get("sat_margin")
 
         # gds: now returned directly in op_region (after sim_api.py fix)
-        # Fall back to raw dict for backwards compatibility
+        # Fall back to raw dict for backwards compatibility.
         gds = data.get("gds") or raw.get(f"gds_{dev_lower}") or 0.0
 
-        # vth: now returned directly in op_region; fallback: derive from vov = vgs - vth
-        vth = data.get("vth") or raw.get(f"vth_{dev_lower}")
-        if vth is None and vov is not None:
-            vth = vgs - vov
-        vth = vth or 0.0
+        # vth: returned directly in op_region; raw dict as fallback for older sims.
+        vth = data.get("vth") or raw.get(f"vth_{dev_lower}") or 0.0
 
         # Cgg = |Cgs| + |Cgd|. ngspice reports Cgs negative (SPICE convention).
         # op_region now includes cgs/cgd directly; fallback to raw dict.
@@ -387,7 +405,7 @@ def parse_response(response: dict) -> dict[str, TransistorOP]:
         cgd = abs(data.get("cgd") or raw.get(f"cgd_{dev_lower}") or 0.0)
         cgg = cgs + cgd
 
-        region = _infer_region(vov, sat_margin)
+        region = _infer_region(vds, vdsat, vgs=vgs, vth=vth, id_val=id_val)
 
         transistors[name] = TransistorOP(
             name=name,
@@ -428,6 +446,8 @@ def simulate_circuit(
     temperature: Optional[float] = None,
     supply_voltage: Optional[float] = None,
     CL: Optional[float] = None,
+    extra_ports: Optional[dict] = None,
+    measure_mismatch: Optional[bool] = None,
     output_dir: Optional[str] = None,
 ) -> dict:
     """
@@ -441,6 +461,16 @@ def simulate_circuit(
         temperature:    Simulation temperature in °C (default: 27).
         supply_voltage: Supply voltage override in V (default: from TOML).
         CL:             Load capacitance override in pF (default: from TOML).
+        extra_ports:    Optional {port_name: DC voltage} dict that overrides
+                        the [testbench.extra_ports] values in the TOML for
+                        this call only (e.g. LV-cascode Vbias_cas_p /
+                        Vbias_cas_n). Use when each sizing iteration
+                        re-derives these from the current vdsat/vth.
+        measure_mismatch: Optional bool. When False, skip the Monte Carlo
+                        mismatch run (~35 s per call). Pass False whenever
+                        the user's spec form leaves the Mismatch field
+                        blank, and True only on the iteration where you
+                        actually need a mismatch number.
         output_dir:     Unique output directory for this simulation run.
                         Required for parallel execution — each concurrent call
                         must use a separate directory (e.g. tempfile.mkdtemp())
@@ -469,7 +499,19 @@ def simulate_circuit(
     if supply_voltage is not None:
         merged_params["supply_voltage"] = supply_voltage
     if CL is not None:
-        merged_params["CL"] = CL
+        # CircuitCollector expects PARAM_CLOAD in picoFarads (the SPICE
+        # template appends a "p" suffix).  The public API of this function
+        # accepts CL in Farads (SI), so convert here.
+        merged_params["CL"] = CL * 1e12  # F → pF
+    if extra_ports is not None:
+        if not isinstance(extra_ports, dict):
+            raise TypeError(
+                f"extra_ports must be dict of {{port: voltage}}, "
+                f"got {type(extra_ports).__name__}"
+            )
+        merged_params["extra_ports"] = dict(extra_ports)
+    if measure_mismatch is not None:
+        merged_params["measure_mismatch"] = bool(measure_mismatch)
 
     response = simulate(
         params=merged_params,

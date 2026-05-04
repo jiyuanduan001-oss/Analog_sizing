@@ -4,3 +4,4 @@ __pycache__/
 traces/
 memory/
 CLAUDE.md
+.nfs*

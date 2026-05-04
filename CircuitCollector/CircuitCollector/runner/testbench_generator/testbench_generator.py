@@ -70,10 +70,10 @@ class TestbenchGenerator:
             .get("sr_tdelay", "10n"),
             "sr_trise": self.raw_config.get("testbench", {})
             .get("slew_rate", {})
-            .get("sr_trise", "1n"),
+            .get("sr_trise", "100p"),
             "sr_tfall": self.raw_config.get("testbench", {})
             .get("slew_rate", {})
-            .get("sr_tfall", "1n"),
+            .get("sr_tfall", "100p"),
             "sr_tpw": self.raw_config.get("testbench", {})
             .get("slew_rate", {})
             .get("sr_tpw", "5u"),
@@ -101,9 +101,23 @@ class TestbenchGenerator:
             .get("op_region", {})
             .get("device_prefix", ""),
             "data_OUTPUT_SWING": f"{self.netlist_name}_{self.raw_config.get('testbench', {}).get('data', {}).get('data_OUTPUT_SWING', 'OUTPUT_SWING')}",
+            # Mismatch Monte Carlo
+            "measure_mismatch": self.raw_config.get("testbench", {})
+            .get("mismatch", {})
+            .get("measure_mismatch", False),
+            "mc_num_runs": self.raw_config.get("testbench", {})
+            .get("mismatch", {})
+            .get("mc_num_runs", 50),
+            "data_MISMATCH": f"{self.netlist_name}_{self.raw_config.get('testbench', {}).get('data', {}).get('data_MISMATCH', 'MISMATCH')}",
             "extract_op_region": self.raw_config.get("circuit", {})
             .get("op_region", {})
             .get("extract_op_region", False),
+            # Extra DC bias ports (e.g. LV cascode bias voltages). Map of
+            # port_name -> DC voltage (V). Empty when unused — the testbench
+            # templates check truthiness before emitting sources.
+            "extra_ports": self.raw_config.get("testbench", {}).get(
+                "extra_ports", {}
+            ),
         }
 
         # set tech template path for Jinja2
@@ -156,7 +170,7 @@ class TestbenchGenerator:
             self.config[k]
             for k in ("measure_DC", "measure_AC", "measure_noise",
                        "measure_slew_rate", "measure_output_swing",
-                       "extract_op_region")
+                       "measure_mismatch", "extract_op_region")
         ):
             raise ValueError(
                 "There is no simulation to generate, please check the config file, "

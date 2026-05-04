@@ -1,0 +1,2 @@
+slew_rate_pos = 3.984560e+07
+slew_rate_neg = -2.83282e+07

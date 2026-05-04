@@ -2,11 +2,21 @@
 .PARAM VCM_ratio = {{VCM_ratio}}
 .PARAM PARAM_CLOAD ={{PARAM_CLOAD}}p
 {% if use_ibias %}
-.PARAM Ib = {{ibias}}
+.PARAM IBIAS = {{ibias}}
 {% endif %}
 
 V1 vdd 0 'supply_voltage'
-V2 vss 0 0 
+V2 vss 0 0
+
+{# Optional DC bias voltage sources (e.g. LV cascode bias). Each port in
+   extra_ports gets a dedicated DC voltage source referenced to vss. The
+   node name matches the port name and is threaded into all DUT
+   instantiations by simulation.j2. #}
+{% if extra_ports %}
+{% for port_name, port_value in extra_ports.items() %}
+V_{{port_name}} {{port_name}} vss DC={{port_value}}
+{% endfor %}
+{% endif %}
 
 {# These are the input voltage sources for the circuit. #}
 Vindc opin 0 'supply_voltage*VCM_ratio'

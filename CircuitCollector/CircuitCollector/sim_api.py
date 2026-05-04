@@ -48,7 +48,7 @@ class SimulationAPI:
         self.base_config_path: Path = (
             (PROJECT_ROOT / base_config_path)
             if base_config_path
-            else (PROJECT_ROOT / "config/skywater/opamp/tsm.toml")
+            else (PROJECT_ROOT / "config/skywater/opamp/5tota_single.toml")
         )
         base_config = load_toml(self.base_config_path)
         circuit_type = base_config["type"]["name"]
@@ -150,6 +150,13 @@ class SimulationAPI:
         "temperature": ("testbench", "dc", "temperature"),
         "PARAM_CLOAD": ("testbench", "ac", "PARAM_CLOAD"),
         "CL": ("testbench", "ac", "PARAM_CLOAD"),  # alias used by AnalogAgent
+        # Per-call enable/disable for the slower measurements. The seed
+        # values come from the TOML; pass False to skip a measurement
+        # for this call only (e.g. mismatch is ~35 s of Monte Carlo).
+        "measure_mismatch": ("testbench", "mismatch", "measure_mismatch"),
+        "measure_noise": ("testbench", "noise", "measure_noise"),
+        "measure_slew_rate": ("testbench", "slew_rate", "measure_slew_rate"),
+        "measure_output_swing": ("testbench", "output_swing", "measure_output_swing"),
     }
 
     def _run_simulation(self, params: Dict[str, Any]) -> Dict[str, Any]:
@@ -173,6 +180,38 @@ class SimulationAPI:
                 for part in path[:-1]:
                     section = section.setdefault(part, {})
                 section[path[-1]] = value
+            elif key == "extra_ports":
+                # Per-simulation override of LV-cascode bias voltages.
+                # Merge into [testbench.extra_ports] so the caller can update
+                # just the ports they care about without clobbering the rest.
+                if not isinstance(value, dict):
+                    raise ValueError(
+                        f"extra_ports must be a dict of {{port: voltage}}, "
+                        f"got {type(value).__name__}"
+                    )
+                tb = config.setdefault("testbench", {})
+                cur = dict(tb.get("extra_ports", {}) or {})
+                for pname, pv in value.items():
+                    if not isinstance(pv, (int, float)):
+                        raise ValueError(
+                            f"extra_ports[{pname!r}] must be numeric (V), "
+                            f"got {type(pv).__name__}"
+                        )
+                    cur[pname] = float(pv)
+                tb["extra_ports"] = cur
+            elif key.startswith("Vbias_"):
+                # Ergonomic shortcut: individual Vbias_* keys route into
+                # [testbench.extra_ports].  (Keeps params-dict flat at the
+                # caller side.)
+                if not isinstance(value, (int, float)):
+                    raise ValueError(
+                        f"{key} must be a numeric voltage, got "
+                        f"{type(value).__name__}"
+                    )
+                tb = config.setdefault("testbench", {})
+                cur = dict(tb.get("extra_ports", {}) or {})
+                cur[key] = float(value)
+                tb["extra_ports"] = cur
             elif key.startswith("ibias"):
                 # ibias params go to [testbench.ibias]
                 config.setdefault("testbench", {}).setdefault("ibias", {})[key] = value
