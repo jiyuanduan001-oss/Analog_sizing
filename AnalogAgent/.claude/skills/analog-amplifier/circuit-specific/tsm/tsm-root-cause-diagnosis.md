@@ -18,6 +18,15 @@ this skill maps each failure to its root cause and recommends a fix.
 
 ---
 
+## ⚠️ Power Utilization — Read Before Any Fault Tree
+
+Before diving into individual fault trees, check whether the design is
+using its power budget. If power is well below target while specs are
+failing, consider increasing I_tail first — it improves GBW, noise, SR,
+and CMRR simultaneously. Allocate remaining margin to ID7 if SR⁻ fails.
+
+---
+
 ## Fault Tree: Device Not Saturated
 
 ### M6 (TAIL) in linear region
@@ -79,20 +88,69 @@ Fix:
 
 ---
 
+## Fault Tree: Tail Current Source Headroom
+
+The TAIL (M6) saturation margin is a cross-cutting concern: when M6
+operates near the saturation boundary, its effective gds rises steeply,
+degrading **multiple specs simultaneously** — CMRR, PSRR⁻, GBW (via
+mirror current loss), and indirectly noise and SR. If more than one of
+these specs fails at the same time, check M6 headroom first.
+
+```
+M6 saturation margin too low  (margin < 100 mV, or multiple specs degraded)
+    │
+    ├── Reduce Vdsat of BIAS_GEN / TAIL
+    │   Push gm/ID of BIAS_GEN (M5) toward weaker inversion.
+    │   Since M5, M6, M8 share the same per-instance W/L, lowering
+    │   Vdsat on M5 lowers Vdsat on M6 and M8 simultaneously.
+    │   This is the most direct fix — it does not change VGS_M3 or
+    │   the voltage stack above M6.
+    │
+    ├── Reduce VGS of DIFF_PAIR
+    │   Push gm/ID of DIFF_PAIR toward weaker inversion.
+    │   VDS_M6 = V_cm − VGS_M3, so any reduction in VGS_M3 adds
+    │   directly to M6 headroom.
+    │   ⚠️ Side effect: wider input pair, more parasitic cap, lower ft.
+    │
+    ├── Increase L5 (= L6) for higher intrinsic ro per device
+    │   Higher ro improves small-signal tail impedance even at the
+    │   same saturation margin.
+    │   ⚠️ Side effect: W5 shrinks, may force M5_M > 1
+    │   (discretization can double the effective mirror ratio).
+    │
+    └── Increase I_bias to reduce mirror ratio
+        Lower M6_M means less VDS compression from finite ro.
+        Only if the spec form allows it (I_bias is often constrained).
+
+Cross-references:
+  CMRR depends on 1/gds_eq_TAIL — see "CMRR Too Low"
+  PSRR⁻ TAIL path scales with gds_eq_TAIL — see "PSRR Too Low"
+  GBW shortfall from mirror current loss — see "GBW Too Low"
+```
+
+⚠️ **Analytical overestimate warning:** The small-signal CMRR and
+PSRR⁻ formulas use gds6 as a constant, but near the saturation
+boundary gds changes steeply with VDS. The analytical prediction can
+overestimate CMRR by 15–20 dB when M6 margin is below 100 mV. Always
+verify with SPICE, and if the analytical model predicts comfortable
+CMRR margin but SPICE fails, check M6 headroom.
+
+---
+
 ## Fault Tree: Gain Too Low
 
 ```
 A0 < A0_target
     │
-    ├── First-stage gain too low (A_v1 = gm3/(gds3+gds1))
+    ├── First-stage gain too low (A_v1 = gm3/(gds3+gds_eq_LOAD))
     │   ├── gds3 too large → increase L3
     │   │   ⚠️ Side effect: larger Cgs3, Cgd3 → may affect GBW
-    │   ├── gds1 too large → increase L1
+    │   ├── gds_eq_LOAD too large → increase L1 (or L_cas for cascode)
     │   │   ⚠️ Side effect: larger Cgs1 → lower mirror pole p3 → PM may degrade
     │   └── Check from OP: intrinsic gain of M3 vs M1
     │       → If one device has much lower gm_gds → that's the bottleneck
     │
-    └── Second-stage gain too low (A_v2 = gm7/(gds7+gds8))
+    └── Second-stage gain too low (A_v2 = gm7/(gds7+gds_eq_OBIAS))
         ├── gm7 too low → increase W7 or ID7
         ├── gds7 + gds8 too high → increase L7 and/or L8 (L8 = L5)
         │   ⚠️ Side effect: longer L7 → slower p2, p4
@@ -161,7 +219,7 @@ PM < PM_target
 SR+ and SR- are separate specs:
 ```
 SR+ = I_tail / Cc
-SR- = min(I_tail / Cc, ID7 / CTL)
+SR- = min(I_tail / Cc, ID7 / CTL_eff)    where CTL_eff = CTL + Cgd7 × A_v2
 ```
 
 ```
@@ -205,13 +263,14 @@ V_swing = VDD - Vdsat_M7 - Vdsat_M8 < Swing_target
 ## Fault Tree: CMRR Too Low
 
 ```
-CMRR = 2·gm3·gm1/[(gds3+gds1)·gds6] < CMRR_target
+CMRR = 2·gm3·gm1/[(gds3+gds_eq_LOAD)·gds_eq_TAIL] < CMRR_target
     │
-    ├── gds6 too high (ro6 too low) → increase L5 (= L6)
-    │   This is the primary fix. TAIL is not speed-critical.
-    │   ⚠️ When M6 margin < 50 mV, OP-extracted gds6 overestimates
-    │   the effective gds. The formula may under-predict CMRR by 5–7 dB.
-    │   If SPICE CMRR passes but formula says fail: check M6 margin.
+    ├── gds_eq_TAIL too high (most common root cause)
+    │   → First check M6 saturation margin.
+    │     If margin < 100 mV or multiple specs (CMRR + PSRR⁻ + GBW)
+    │     fail together → see "Tail Current Source Headroom" fault tree.
+    │   → If M6 is well saturated: increase L5 (= L6) or add cascode to TAIL.
+    │     TAIL is not speed-critical.
     │
     └── A0 too low → fix gain first (see gain fault tree)
 ```
@@ -222,52 +281,42 @@ CMRR = 2·gm3·gm1/[(gds3+gds1)·gds6] < CMRR_target
 
 ```
 PSRR⁻ — use the two-path formula (see tsm-equation.md):
-  A_VSS_M8 = gds8 / (gds7 + gds8)                  [M8 direct]
-  A_VSS_M6 = gds6·gds1·gm7 / [2·gm1·(gds3+gds1)·(gds7+gds8)]  [M6 tail]
-  PSRR⁻    = A0 / (A_VSS_M8 + A_VSS_M6)
+  A_VSS_M8 = gds_eq_OBIAS / (gds7 + gds_eq_OBIAS)                      [M8 direct]
+  A_VSS_TAIL = gds_eq_TAIL·gds_eq_LOAD·gm7 / [2·gm1·(gds3+gds_eq_LOAD)·(gds7+gds_eq_OBIAS)]  [TAIL]
+  PSRR⁻    = A0 / (A_VSS_M8 + A_VSS_TAIL)
 
   PSRR⁻ too low:
     │
-    ├── A_VSS_M6 dominates (check: A_VSS_M6 > A_VSS_M8)
-    │   Root cause: gds6 too high (M6 near triode)
-    │   → Increase L5 (= L6) for higher ro6
-    │   → Or increase M6 Vds headroom (raise gm/ID of DIFF_PAIR to reduce VGS_M3)
+    ├── A_VSS_TAIL dominates (check: A_VSS_TAIL > A_VSS_M8)
+    │   Root cause: gds_eq_TAIL too high (M6 near triode)
+    │   → If M6 margin < 100 mV or CMRR also fails
+    │     → see "Tail Current Source Headroom" fault tree
+    │   → If M6 well saturated: increase L5 (= L6) for higher ro_eq_TAIL
     │
-    ├── A_VSS_M8 dominates (check: A_VSS_M8 > A_VSS_M6)
-    │   Root cause: gds8 too high
-    │   → Increase L5 (= L8) for higher ro8
+    ├── A_VSS_M8 dominates (check: A_VSS_M8 > A_VSS_TAIL)
+    │   Root cause: gds_eq_OBIAS too high
+    │   → Increase L5 (= L8) for higher ro_eq_OBIAS
     │
     └── Both paths comparable
-        → Increase L5 (benefits both ro6 and ro8)
+        → Increase L5 (benefits both ro_eq_TAIL and ro_eq_OBIAS)
         → Or improve first-stage gain (increase L3 or L1)
 
-  ⚠️ The legacy formula PSRR⁻ = gm3·gm7/[(gds3+gds1)·gds8] ignores the
-  M6 tail coupling path. Do NOT use it when M6 Vds margin < 100 mV —
-  it overestimates PSRR⁻ by 10–20 dB.
+PSRR⁺ — use the 4-node formula (see tsm-equation.md):
+  Solve the 4-node DC system (net1, net5, vout, net2) for δVout/δVDD,
+  then PSRR⁺ ≈ (1+A0) / |δVout/δVDD|.
 
-PSRR⁺ — use the corrected formula (see tsm-equation.md):
-  PSRR⁺ = A0 · (gds7 - gds8) / |gds7 - gm7·gds3/gm1|
-
-  Net5 tracks VDD through M1/M2 (sources at VDD). The VDD coupling
-  at the output depends on the cancellation between gds7 (pushes Vout
-  toward VDD) and gm7·gds3/gm1 (net5 overshoot opposes the push).
+  The dominant coupling path is M7's gds7 pushing vout toward VDD.
+  The mirror's VDD tracking partially cancels this, but the tail node
+  shift limits the cancellation.
 
   PSRR⁺ too low:
     │
-    ├── Cancellation in denominator is poor (gm7·gds3/gm1 << gds7)
-    │   → Increase gm7·gds3/gm1 to approach gds7:
-    │     - Increase gds3 (shorter L3) — but hurts gain, usually undesirable
-    │     - Increase gm7/gm1 ratio — increase gm7 or reduce gm1
-    │
     ├── A0 too low → fix gain first (see gain fault tree)
     │
-    └── gds7 ≈ gds8 (denominator gds7-gds8 is small)
-        → This actually HELPS PSRR⁺ (numerator shrinks proportionally)
-        → If gds7 < gds8: sign flips, different cancellation regime
-
-  ⚠️ The legacy formula PSRR⁺ ≈ gm3/gds3 underestimates PSRR⁺ by
-  20–25 dB because it ignores that net5 naturally tracks VDD through
-  the PMOS load (M1/M2 sources at VDD).
+    ├── gds7 too high → increase L7 (improves ro7)
+    │
+    └── TAIL gds too high → increase L5 (= L6) or improve M6 headroom
+        (reduces tail node shift, improves VDD tracking cancellation)
 ```
 
 ---
@@ -291,6 +340,10 @@ P = VDD × (I_bias + I_tail + ID7) > P_target
         → Optimize I_bias (reduce if mirror ratios allow)
 ```
 
+## Fault Tree: Power Under-Utilized
+
+See **"⚠️ Power Utilization"** at the top of this file.
+
 ---
 
 ## Fault Tree: Noise Too High
@@ -302,7 +355,7 @@ by the simulator. For pre-simulation guidance:
 Integrated noise too high
     │
     ├── Thermal noise dominated
-    │   → Increase gm3 (more current or lower gm/ID)
+    │   → Increase gm3 (more current or larger gm/ID)
     │   → gm1/gm3 ratio also matters — minimize gm1 relative to gm3
     │
     └── 1/f noise dominated

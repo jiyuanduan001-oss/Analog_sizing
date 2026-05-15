@@ -8,8 +8,12 @@ setup(
     install_requires=[
         "jinja2",
         "toml",
+        "numpy",
+        "fastapi",
+        "pydantic",
+        "redis",
     ],
     python_requires=">=3.11",
-    author="Shikai Wang",
+    author="Jiyuan",
     description="Analog circuit testbench generator and simulation framework.",
 )

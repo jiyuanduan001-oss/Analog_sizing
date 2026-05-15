@@ -317,5 +317,5 @@ by LOAD sub-block type.
 |------|----------------|---------------------------|
 | Output (vout) | M1 drain, M5 drain, CL | `C1 = CL + Cdb1 + Cdb5 + Cgd1 + Cgd5` |
 | Mirror (net1) | M2 drain, M6 drain/gate, M5 gate | `C2 = Cdb2 + Cdb6 + Cgs5 + Cgs6 + Cgd2 + Cgd5` |
-| Tail (net2) | M1 source, M2 source, M3 drain | `C3 = Cdb3 + Cgd3 + Cgs1 + Cgs2` |
+| Tail (net2) | M1 source, M2 source, M3 drain | `C3 = Cdb3 + Cgd3` (grounded); `Cgs1, Cgs2` are coupling caps to vinn/vinp |
 | Cascode internal | M_main drain, M_cas source | `C_int = Cgs_cas + Cdb5 + Cgd5` |

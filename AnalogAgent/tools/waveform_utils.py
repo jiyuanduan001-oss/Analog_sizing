@@ -159,25 +159,64 @@ def plot_ac_bode(
         dc = specs.get("dcgain_")
         gbw = specs.get("gain_bandwidth_product_")
         if dc is not None:
-            ax_gain.axhline(dc, color="green", linewidth=0.8, linestyle=":",
-                            label=f"DC gain = {dc:.1f} dB")
+            ax_gain.axhline(dc, color="green", linewidth=0.8, linestyle=":")
+            # Annotate DC gain value on the curve at low frequency
+            ax_gain.annotate(
+                f"DC gain = {dc:.1f} dB",
+                xy=(freq[0], dc), xytext=(freq[0] * 5, dc - 8),
+                fontsize=9, fontweight="bold", color="green",
+                arrowprops=dict(arrowstyle="->", color="green", lw=1.2),
+            )
         if gbw is not None:
-            ax_gain.axvline(gbw, color="red", linewidth=0.8, linestyle=":",
-                            label=f"GBW = {gbw/1e6:.1f} MHz")
+            ax_gain.axvline(gbw, color="red", linewidth=0.8, linestyle=":")
+            # Place a marker at the 0-dB crossing and annotate GBW
+            ax_gain.plot(gbw, 0, "ro", markersize=6, zorder=5)
+            ax_gain.annotate(
+                f"GBW = {gbw/1e6:.1f} MHz",
+                xy=(gbw, 0), xytext=(gbw * 3, 12),
+                fontsize=9, fontweight="bold", color="red",
+                arrowprops=dict(arrowstyle="->", color="red", lw=1.2),
+            )
         ax_gain.legend(fontsize=8, loc="upper right")
 
     # -- Phase --
     ax_phase.semilogx(freq, phase_deg, "r-", linewidth=1.5, label="Phase")
     ax_phase.axhline(0, color="gray", linewidth=0.5, linestyle="--")
+    ax_phase.axhline(-180, color="gray", linewidth=0.5, linestyle="--")
     ax_phase.set_ylabel("Phase (deg)")
     ax_phase.grid(True, which="both", alpha=0.3)
 
     if specs:
         pm = specs.get("phase_margin")
+        gbw = specs.get("gain_bandwidth_product_")
         if pm is not None:
-            ax_phase.axhline(-180 + pm, color="green", linewidth=0.8,
-                             linestyle=":", label=f"PM = {pm:.1f}\u00b0")
-            ax_phase.legend(fontsize=8, loc="lower left")
+            phase_at_pm = -180 + pm
+            ax_phase.axhline(phase_at_pm, color="green", linewidth=0.8,
+                             linestyle=":")
+            # Place marker at the GBW frequency on the phase curve
+            if gbw is not None and len(freq) > 1:
+                # Interpolate phase at GBW frequency
+                phase_at_gbw = np.interp(gbw, freq, phase_deg)
+                ax_phase.plot(gbw, phase_at_gbw, "go", markersize=6, zorder=5)
+                # Draw a double-headed arrow showing PM
+                ax_phase.annotate(
+                    "", xy=(gbw, -180), xytext=(gbw, phase_at_gbw),
+                    arrowprops=dict(arrowstyle="<->", color="green", lw=1.5),
+                )
+                ax_phase.annotate(
+                    f"PM = {pm:.1f}\u00b0",
+                    xy=(gbw, phase_at_gbw),
+                    xytext=(gbw * 3, phase_at_gbw + 15),
+                    fontsize=9, fontweight="bold", color="green",
+                    arrowprops=dict(arrowstyle="->", color="green", lw=1.2),
+                )
+            else:
+                ax_phase.text(
+                    0.02, 0.15, f"PM = {pm:.1f}\u00b0",
+                    transform=ax_phase.transAxes,
+                    fontsize=9, fontweight="bold", color="green",
+                    bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="green", alpha=0.8),
+                )
 
     # -- CMRR / PSRR --
     # The testbench stores rejection ratios as negative dB (e.g. -62 dB).
@@ -193,15 +232,29 @@ def plot_ac_bode(
         cmrr_dc = specs.get("cmrr")
         psrrp_dc = specs.get("dcpsrp")
         psrrn_dc = specs.get("dcpsrn")
-        annotations = []
+        # Annotate DC values directly on the curves at low frequency
+        f_annot = freq[0] * 3
         if cmrr_dc is not None:
-            annotations.append(f"CMRR={abs(cmrr_dc):.1f}dB")
+            ax_rej.annotate(
+                f"{abs(cmrr_dc):.1f} dB",
+                xy=(freq[0], abs(cmrr_dc)), xytext=(f_annot * 10, abs(cmrr_dc) + 3),
+                fontsize=8, fontweight="bold", color="green",
+                arrowprops=dict(arrowstyle="->", color="green", lw=0.8),
+            )
         if psrrp_dc is not None:
-            annotations.append(f"PSRR+={abs(psrrp_dc):.1f}dB")
+            ax_rej.annotate(
+                f"{abs(psrrp_dc):.1f} dB",
+                xy=(freq[0], abs(psrrp_dc)), xytext=(f_annot * 10, abs(psrrp_dc) + 3),
+                fontsize=8, fontweight="bold", color="m",
+                arrowprops=dict(arrowstyle="->", color="m", lw=0.8),
+            )
         if psrrn_dc is not None:
-            annotations.append(f"PSRR\u2212={abs(psrrn_dc):.1f}dB")
-        if annotations:
-            ax_rej.set_title("DC: " + ", ".join(annotations), fontsize=9, loc="right")
+            ax_rej.annotate(
+                f"{abs(psrrn_dc):.1f} dB",
+                xy=(freq[0], abs(psrrn_dc)), xytext=(f_annot * 10, abs(psrrn_dc) - 6),
+                fontsize=8, fontweight="bold", color="c",
+                arrowprops=dict(arrowstyle="->", color="c", lw=0.8),
+            )
 
     ax_rej.legend(fontsize=8, loc="lower left")
 
@@ -216,6 +269,7 @@ def plot_transient(
     filepath: str | Path,
     output_png: str | Path,
     title: str = "Transient (Slew Rate)",
+    specs: Optional[dict] = None,
 ) -> str:
     """
     Generate a transient plot from the slew-rate waveform file.
@@ -229,6 +283,8 @@ def plot_transient(
     Args:
         filepath:   Path to ``*_waveform_TRAN.txt``.
         output_png: Destination PNG path.
+        specs:      Optional dict with 'slew_rate_pos', 'slew_rate_neg'
+                    for on-plot annotation.
 
     Returns:
         The output PNG path.
@@ -247,8 +303,45 @@ def plot_transient(
     ax.set_xlabel("Time (\u00b5s)")
     ax.set_ylabel("Voltage (V)")
     ax.set_title(title)
-    ax.legend(fontsize=8)
     ax.grid(True, alpha=0.3)
+
+    if specs:
+        sr_pos = specs.get("slew_rate_pos")
+        sr_neg = specs.get("slew_rate_neg")
+        # Find the rising and falling edges to annotate
+        dv = np.diff(v_out)
+        dt = np.diff(time)
+        slope = dv / dt  # V/s
+
+        if sr_pos is not None:
+            # Find the steepest positive slope region
+            pos_idx = np.argmax(slope)
+            t_rise = time[pos_idx] * 1e6  # µs
+            v_rise = v_out[pos_idx]
+            ax.annotate(
+                f"SR+ = {sr_pos/1e6:.1f} MV/s",
+                xy=(t_rise, v_rise),
+                xytext=(t_rise + (time[-1] - time[0]) * 1e6 * 0.05, v_rise + 0.15),
+                fontsize=9, fontweight="bold", color="darkgreen",
+                arrowprops=dict(arrowstyle="->", color="darkgreen", lw=1.2),
+                bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="darkgreen", alpha=0.85),
+            )
+
+        if sr_neg is not None:
+            # Find the steepest negative slope region
+            neg_idx = np.argmin(slope)
+            t_fall = time[neg_idx] * 1e6  # µs
+            v_fall = v_out[neg_idx]
+            ax.annotate(
+                f"SR\u2212 = {abs(sr_neg)/1e6:.1f} MV/s",
+                xy=(t_fall, v_fall),
+                xytext=(t_fall + (time[-1] - time[0]) * 1e6 * 0.05, v_fall - 0.15),
+                fontsize=9, fontweight="bold", color="darkred",
+                arrowprops=dict(arrowstyle="->", color="darkred", lw=1.2),
+                bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="darkred", alpha=0.85),
+            )
+
+    ax.legend(fontsize=8)
 
     plt.tight_layout()
     Path(output_png).parent.mkdir(parents=True, exist_ok=True)
@@ -261,6 +354,7 @@ def plot_output_swing(
     filepath: str | Path,
     output_png: str | Path,
     title: str = "Output Swing (DC Sweep)",
+    specs: Optional[dict] = None,
 ) -> str:
     """
     Generate an output-swing plot from the DC sweep waveform file.
@@ -272,6 +366,8 @@ def plot_output_swing(
     Args:
         filepath:   Path to ``*_waveform_SWING.txt``.
         output_png: Destination PNG path.
+        specs:      Optional dict with 'vout_high', 'vout_low',
+                    'output_swing' for on-plot annotation.
 
     Returns:
         The output PNG path.
@@ -290,8 +386,40 @@ def plot_output_swing(
     ax.set_xlabel("Input Voltage (V)")
     ax.set_ylabel("Output Voltage (V)")
     ax.set_title(title)
-    ax.legend(fontsize=8)
     ax.grid(True, alpha=0.3)
+
+    if specs:
+        v_high = specs.get("vout_high")
+        v_low = specs.get("vout_low")
+        swing = specs.get("output_swing")
+        if v_high is not None:
+            ax.axhline(v_high, color="green", linewidth=0.8, linestyle=":")
+            ax.annotate(
+                f"Vout,max = {v_high:.3f} V",
+                xy=(vin[0], v_high),
+                xytext=(vin[0] + (vin[-1] - vin[0]) * 0.05, v_high + 0.06),
+                fontsize=9, fontweight="bold", color="green",
+                bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="green", alpha=0.85),
+            )
+        if v_low is not None:
+            ax.axhline(v_low, color="red", linewidth=0.8, linestyle=":")
+            ax.annotate(
+                f"Vout,min = {v_low:.3f} V",
+                xy=(vin[-1], v_low),
+                xytext=(vin[0] + (vin[-1] - vin[0]) * 0.05, v_low - 0.08),
+                fontsize=9, fontweight="bold", color="red",
+                bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="red", alpha=0.85),
+            )
+        if swing is not None:
+            ax.text(
+                0.98, 0.5,
+                f"Output Swing = {swing:.3f} V",
+                transform=ax.transAxes, fontsize=10, fontweight="bold",
+                color="purple", ha="right", va="center",
+                bbox=dict(boxstyle="round,pad=0.4", fc="white", ec="purple", alpha=0.85),
+            )
+
+    ax.legend(fontsize=8)
 
     plt.tight_layout()
     Path(output_png).parent.mkdir(parents=True, exist_ok=True)
@@ -341,13 +469,45 @@ def plot_noise(
     if specs:
         irn_int = specs.get("integrated_input_noise")
         irn_spot = specs.get("input_noise_density_spot")
-        annotations = []
+        irn_1hz = specs.get("input_noise_density_1hz")
+
+        # Annotate spot noise at 10 kHz with marker on curve
+        if irn_spot is not None and len(freq) > 1:
+            f_spot = 1e4  # 10 kHz
+            irn_at_spot = np.interp(f_spot, freq, irn)
+            ax.plot(f_spot, irn_at_spot, "ro", markersize=6, zorder=5)
+            ax.annotate(
+                f"Spot @10kHz = {irn_spot*1e9:.1f} nV/\u221aHz",
+                xy=(f_spot, irn_at_spot),
+                xytext=(f_spot * 10, irn_at_spot * 2),
+                fontsize=9, fontweight="bold", color="red",
+                arrowprops=dict(arrowstyle="->", color="red", lw=1.2),
+                bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="red", alpha=0.85),
+            )
+
+        # Annotate 1/f noise at 1 Hz
+        if irn_1hz is not None and len(freq) > 1:
+            irn_at_1 = np.interp(1.0, freq, irn) if freq[0] <= 1.0 else irn[0]
+            f_1hz = max(freq[0], 1.0)
+            ax.plot(f_1hz, irn_at_1, "gs", markersize=6, zorder=5)
+            ax.annotate(
+                f"@1Hz = {irn_1hz*1e6:.1f} \u00b5V/\u221aHz",
+                xy=(f_1hz, irn_at_1),
+                xytext=(f_1hz * 30, irn_at_1 * 0.5),
+                fontsize=9, fontweight="bold", color="green",
+                arrowprops=dict(arrowstyle="->", color="green", lw=1.2),
+                bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="green", alpha=0.85),
+            )
+
+        # Integrated noise as a text box
         if irn_int is not None:
-            annotations.append(f"IRN(integrated) = {irn_int*1e6:.1f} \u00b5V rms")
-        if irn_spot is not None:
-            annotations.append(f"IRN(spot @10kHz) = {irn_spot*1e9:.1f} nV/\u221aHz")
-        if annotations:
-            ax.set_title(title + "\n" + ", ".join(annotations), fontsize=10)
+            ax.text(
+                0.98, 0.95,
+                f"IRN(integrated) = {irn_int*1e6:.1f} \u00b5V rms",
+                transform=ax.transAxes, fontsize=10, fontweight="bold",
+                color="purple", ha="right", va="top",
+                bbox=dict(boxstyle="round,pad=0.4", fc="white", ec="purple", alpha=0.85),
+            )
 
     plt.tight_layout()
     Path(output_png).parent.mkdir(parents=True, exist_ok=True)
@@ -438,12 +598,14 @@ def generate_all_plots(
 
     tran_file = src_dir / f"{topology_name}_waveform_TRAN.txt"
     if tran_file.exists():
-        png = plot_transient(tran_file, dst_dir / f"{topology_name}_transient.png")
+        png = plot_transient(tran_file, dst_dir / f"{topology_name}_transient.png",
+                             specs=specs)
         generated.append(png)
 
     swing_file = src_dir / f"{topology_name}_waveform_SWING.txt"
     if swing_file.exists():
-        png = plot_output_swing(swing_file, dst_dir / f"{topology_name}_swing.png")
+        png = plot_output_swing(swing_file, dst_dir / f"{topology_name}_swing.png",
+                                specs=specs)
         generated.append(png)
 
     noise_file = src_dir / f"{topology_name}_waveform_NOISE.txt"

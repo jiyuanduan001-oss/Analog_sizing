@@ -932,5 +932,33 @@
     "topology": "tsm_single",
     "corner": "ff",
     "temperature": 20
+  },
+  {
+    "CL_pF": 5.0,
+    "gm_id_3": 18,
+    "GBW_tgt_MHz": 50,
+    "GBW_spice_MHz": 54.20632,
+    "Cc_pF": 3.1035213902919594,
+    "PM_analytical": 64.64802919548568,
+    "PM_spice": 67.84439,
+    "Cc_over_CL": 0.6207042780583919,
+    "GBW_MHz": 60.0,
+    "topology": "tsm_single",
+    "corner": "ff",
+    "temperature": 20
+  },
+  {
+    "CL_pF": 5.0,
+    "gm_id_3": 16,
+    "GBW_tgt_MHz": 50,
+    "GBW_spice_MHz": 50.75956,
+    "Cc_pF": 2.35,
+    "PM_analytical": 51.658803956730175,
+    "PM_spice": 50.66127,
+    "Cc_over_CL": 0.47000000000000003,
+    "GBW_MHz": 54.1804061589431,
+    "topology": "tsm_single",
+    "corner": "ff",
+    "temperature": 20
   }
 ]

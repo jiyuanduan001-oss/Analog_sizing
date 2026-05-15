@@ -379,12 +379,11 @@ import numpy as np
 Go   = gds7 + gds_eq_OBIAS
 G1   = gds_eq_LOAD + gds3          # gds2≡gds_LOAD, gds4≡gds3
 tau  = Rc_approx * Cc               # use approximate Rc for initial cubic
-Ccomp = Cc + Cgd7;  Gt = gm7 + Go + G1;  Ct = CTL + C1
 
 d0 = Go * G1
-d1 = Go*C1 + G1*CTL + Go*G1*tau + Ccomp*Gt
-d2 = C1*CTL + (Go*C1 + G1*CTL)*tau + Ccomp*Ct + tau*Cgd7*Gt
-d3 = C1*CTL*tau + tau*Cgd7*Ct
+d1 = Go*C1 + G1*CTL + Go*G1*tau + Cc*(gm7+Go+G1) + gm7*Cgd7
+d2 = C1*CTL - Cgd7**2 + tau*(G1*CTL + Go*C1 + gm7*Cgd7) + Cc*(C1+CTL) - 2*Cc*Cgd7
+d3 = tau * (C1*CTL - Cgd7**2)
 
 poles = sorted(np.roots([d3, d2, d1, d0]), key=lambda x: abs(x))
 p1_kcl, p2_kcl, p4_kcl = [abs(p) for p in poles]   # rad/s
@@ -464,12 +463,11 @@ Go    = gds7 + gds_eq_OBIAS
 G1    = gds_eq_LOAD + gds3
 Rc_approx = (1/gm7) × (Cc + C1) × (Cc + CTL) / Cc²   (initial estimate)
 tau   = Rc_approx × Cc
-Ccomp = Cc + Cgd7;  Gt = gm7 + Go + G1;  Ct = CTL + C1
 
 d0 = Go × G1
-d1 = Go×C1 + G1×CTL + Go×G1×tau + Ccomp×Gt
-d2 = C1×CTL + (Go×C1 + G1×CTL)×tau + Ccomp×Ct + tau×Cgd7×Gt
-d3 = C1×CTL×tau + tau×Cgd7×Ct
+d1 = Go×C1 + G1×CTL + Go×G1×tau + Cc×(gm7+Go+G1) + gm7×Cgd7
+d2 = C1×CTL - Cgd7² + tau×(G1×CTL + Go×C1 + gm7×Cgd7) + Cc×(C1+CTL) - 2×Cc×Cgd7
+d3 = tau × (C1×CTL - Cgd7²)
 
 poles = sorted(numpy.roots([d3, d2, d1, d0]), key=lambda x: abs(x))
 p1_kcl, p2_kcl, p4_kcl = [abs(p) for p in poles]     (rad/s)
@@ -507,11 +505,21 @@ CMRR  = 2·gm3·gm1 / [(gds3 + gds_eq_LOAD)·gds_eq_TAIL]
 
 # PSRR⁻: uses effective gds of LOAD and OUTPUT_BIAS:
 A_VSS_M8 = gds_eq_OBIAS / (gds7 + gds_eq_OBIAS)
-A_VSS_M6 = gds6·gds_eq_LOAD·gm7 / [2·gm1·(gds3+gds_eq_LOAD)·(gds7+gds_eq_OBIAS)]
-PSRR⁻    = A0 / (A_VSS_M8 + A_VSS_M6)
+A_VSS_TAIL = gds_eq_TAIL·gds_eq_LOAD·gm7 / [2·gm1·(gds3+gds_eq_LOAD)·(gds7+gds_eq_OBIAS)]
+PSRR⁻    = A0 / (A_VSS_M8 + A_VSS_TAIL)
 
-# PSRR⁺ (same structure; substitute gds_eq for single gds where applicable):
-PSRR⁺    = A0 · (gds7 - gds_eq_OBIAS) / |gds7 - gm7·gds3/gm1|
+# PSRR⁺ (4-node, see tsm-equation.md):
+import numpy as np
+A_psrr = np.array([
+  [gm1+gds_eq_LOAD+gds3, 0, 0, -(gm3+gds3)],
+  [gm1, gds_eq_LOAD+gds3, 0, -(gm3+gds3)],
+  [0, gm7, gds7+gds_eq_OBIAS, 0],
+  [gds3, gds3, 0, -2*gm3-2*gds3+gds_eq_TAIL],
+])
+b_psrr = np.array([gm1+gds_eq_LOAD, gm1+gds_eq_LOAD, gm7+gds7, 0])
+x_psrr = np.linalg.solve(A_psrr, b_psrr)
+A_supply = x_psrr[2]   # open-loop δVout/δVDD
+PSRR⁺    = (1 + A0) / abs(A_supply)  # closed-loop
 ```
 
 **GBW/ft validity check (MANDATORY before printing results):**

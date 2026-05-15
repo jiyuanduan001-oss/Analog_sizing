@@ -204,10 +204,16 @@ physical gate-drain overlap dominates. LUT Cdb misses junction sidewall
 terms that are significant for multi-instance (high-M) devices.
 
 **Single load / single output-bias:**
+
+Cgd7 couples net5 to vout. It appears in the KCL cubic as a coupling
+element in Ycomp (alongside Rc-Cc). To avoid double-counting, **exclude
+Cgd7 from C1 and CTL** when computing the cubic. For slew rate, use
+`CTL_total = CTL + Cgd7` (total physical output cap).
+
 ```
-C1  = Cgs7 + Cdb2 + Cdb4 + Cgd2 + Cgd4 + Cgd7    [cap at net5 — includes Cgd7 coupling to vout]
-CTL = CL + Cdb7 + Cdb8 + Cgd7 + Cgd8               [total output cap]
-C2  = Cgs1 + Cgs2 + Cdb1 + Cdb3 + Cgd2 + Cgd3     [cap at net1 — includes Cgd2/Cgd3 coupling]
+C1  = Cgs7 + Cdb2 + Cdb4 + Cgd2 + Cgd4             [net5 grounded cap, excl. Cgd7]
+CTL = CL + Cdb7 + Cdb8 + Cgd8                       [vout grounded cap, excl. Cgd7]
+C2  = Cgs1 + Cgs2 + Cdb1 + Cdb3 + Cgd2 + Cgd3     [net1 cap]
 ```
 
 **Cascode / LV-cascode LOAD:** `Cdb1` moves from net1 to internal node;
@@ -220,7 +226,7 @@ C_int_LOAD = Cgs_loadcas + Cdb1 + Cgd1
 **Cascode / LV-cascode OUTPUT_BIAS:** `Cdb8 + Cgd8` in CTL replaced by
 cascode device caps:
 ```
-CTL = CL + Cdb7 + Cdb_obcas + Cgd7 + Cgd_obcas
+CTL = CL + Cdb7 + Cdb_obcas + Cgd_obcas              [excl. Cgd7]
 C_int_OBIAS = Cgs_obcas + Cdb8 + Cgd8
 ```
 
@@ -247,15 +253,17 @@ poles of the coupled 2-node system. Define:
 tau    = Rc * Cc                         # Rc-Cc time constant
 Go     = gds7 + gds_eq_OBIAS            # output conductance
 G1     = gds_eq_LOAD + gds3             # net5 conductance (gds2=gds_LOAD, gds4=gds3)
-Ccomp  = Cc + Cgd7                       # total compensation cap
-Gt     = gm7 + Go + G1                  # ≈ gm7 (dominant)
-Ct     = CTL + C1                        # total node cap
 
 # Cubic: d3·s³ + d2·s² + d1·s + d0 = 0
+# Derived from det[(1+s·tau)·Y_2node] where Y_2node is the coupled
+# net5-vout admittance matrix with Ycomp = s·Cc/(1+s·tau) + s·Cgd7.
+# Cgd7 is a COUPLING cap (not grounded), which produces cross-terms
+# -Cgd7² and -2·Cc·Cgd7 in the determinant.
+
 d0 = Go * G1
-d1 = Go*C1 + G1*CTL + Go*G1*tau + Ccomp*Gt
-d2 = C1*CTL + (Go*C1 + G1*CTL)*tau + Ccomp*Ct + tau*Cgd7*Gt
-d3 = C1*CTL*tau + tau*Cgd7*Ct
+d1 = Go*C1 + G1*CTL + Go*G1*tau + Cc*(gm7+Go+G1) + gm7*Cgd7
+d2 = C1*CTL - Cgd7**2 + tau*(G1*CTL + Go*C1 + gm7*Cgd7) + Cc*(C1+CTL) - 2*Cc*Cgd7
+d3 = tau * (C1*CTL - Cgd7**2)
 
 poles = numpy.roots([d3, d2, d1, d0])    # 3 real negative roots
 # Sort by magnitude: poles[0]=p1 (dominant), poles[1]=p2, poles[2]=p4
@@ -347,7 +355,7 @@ SR+_sustained = I_tail / Cc
 SR-            = min(I_tail / Cc,  ID7 / CTL)
 ```
 
-where `CTL = CL + Cdb7 + Cdb8 + Cgd7 + Cgd8` is the total output
+where `CTL_total = CL + Cdb7 + Cdb8 + Cgd7 + Cgd8` is the total output
 capacitance including parasitics (use corrected Cgd/Cdb with extrinsic
 terms from `extrinsic_caps()`).
 
@@ -419,7 +427,7 @@ V²_noise = S_1f² × ln(fH/fL) + S_thermal² × (fH - fL)
 
 **CMRR:**
 ```
-CMRR = 2·gm3·gm1 / [(gds3 + gds1)·gds_eq_TAIL]
+CMRR = 2·gm3·gm1 / [(gds3 + gds_eq_LOAD)·gds_eq_TAIL]
 ```
 Dominated by tail current source impedance (`ro_eq_TAIL = 1/gds_eq_TAIL`).
 
@@ -439,20 +447,16 @@ VSS noise couples to the output through **two paths**:
 *Path 1 — M8 direct coupling (output node):*
 M8 source/body at VSS. When VSS shifts, M8 Vds changes:
 ```
-A_VSS_M8 = gds8 / (gds7 + gds8)
+A_VSS_M8 = gds_eq_OBIAS / (gds7 + gds_eq_OBIAS)
 ```
 
 *Path 2 — TAIL coupling (dominant when TAIL is near triode):*
 TAIL source at VSS. When VSS shifts, TAIL Vds changes →
 `ΔI_tail = gds_eq_TAIL · ΔVSS`. This common-mode perturbation leaks
-through the mirror mismatch (gds1 vs gm1) to net5, then is amplified
+through the mirror mismatch (gds_eq_LOAD vs gm1) to net5, then is amplified
 by the second stage:
 ```
-A_VSS_TAIL = [gds_eq_TAIL · gds1 · gm7] / [2·(gm1 + gds1)·(gds3 + gds1)·(gds7 + gds8)]
-```
-Simplified (gm1 >> gds1):
-```
-A_VSS_TAIL ≈ [gds_eq_TAIL · gds1 · gm7] / [2·gm1·(gds3 + gds1)·(gds7 + gds8)]
+A_VSS_TAIL = [gds_eq_TAIL · gds_eq_LOAD · gm7] / [2·gm1·(gds3 + gds_eq_LOAD)·(gds7 + gds_eq_OBIAS)]
 ```
 
 The TAIL path dominates when `gds_eq_TAIL` is large (TAIL near triode
@@ -475,68 +479,60 @@ TAIL Vds headroom by raising gm/ID of the diff pair (reduces VGS_M3).
 
 **PSRR⁺ (VDD coupling, low frequency):**
 
-VDD couples to the output through M7, whose source is directly at VDD.
-The analysis requires careful small-signal KCL at net1, net5, and Vout.
-At DC, Cc is an open circuit so it does not provide feedback.
+VDD couples to the output through M1/M2 (PMOS sources at VDD) and M7
+(PMOS source at VDD). At DC, Cc is an open circuit. The testbench
+measures PSRR⁺ in **closed-loop** (unity-gain feedback), so:
+`PSRR⁺ ≈ 1/|A_supply_open| × A0` where `A_supply_open = δVout/δVDD`
+is the open-loop VDD-to-output coupling.
 
-**Step 1 — net1 (mirror node) tracking:**
+**4-node DC analysis (includes tail node dynamics):**
 
-KCL at net1: M1 current (diode, source=VDD) = M3 current (drain to net1).
-```
-(gm1 + gds1)·(δVnet1 − δVDD) = gds3·δVnet1
-→ δVnet1/δVDD = (gm1 + gds1) / (gm1 + gds1 − gds3)
-              ≈ 1 + gds3/gm1    (since gm1 >> gds1, gds3)
-```
-Net1 slightly **overshoots** VDD because the M3 gds load is smaller
-than the M1 diode conductance.
+The 3-step analysis (net1→net5→vout) that ignores the tail node
+produces a near-perfect cancellation (`A_supply ≈ 0`) and overestimates
+PSRR⁺ by 30–55 dB. The correct approach includes net2 (tail) as a
+4th unknown, because M3/M4 source voltages shift when VDD changes.
 
-**Step 2 — net5 (1st-stage output) tracking:**
+Solve the 4-node linear system `A·x = b` with `x = [δVnet1, δVnet5, δVout, δVnet2]`
+per unit `δVDD = 1`:
 
-KCL at net5: M2 current (gate=net1, source=VDD) = M4 current (gds only).
-```
-gm1·(δVnet1 − δVDD) + gds1·(δVnet5 − δVDD) = gds3·δVnet5
-```
-Substituting δVnet1 = (1 + gds3/gm1)·δVDD:
-```
-δVnet5/δVDD = (gm1 + gds1) / (gm1 + gds1 − gds3)
-            ≈ 1 + gds3/gm1
-```
-Net5 tracks VDD with the same overshoot as net1.
+```python
+import numpy as np
 
-**Step 3 — output coupling:**
+# VDD perturbation affects M1, M2, M7 (PMOS, source=VDD).
+# M3/M4 gates (vinn, vinp) are fixed for PSRR+ analysis.
+# M5/M6/M8 gates (net3) are AC ground (I0 is ideal current source).
 
-M7 (PFET, source=VDD, gate=net5, drain=Vout), M8 (NFET at output):
-```
-ids_M7 = gm7·(δVnet5 − δVDD) + gds7·(δVout − δVDD)
-ids_M8 = gds8·δVout
-```
-Setting ids_M7 = ids_M8 and letting x = δVnet5/δVDD:
-```
-δVout/δVDD = [gds7 − gm7·(x − 1)] / (gds7 − gds8)
-           ≈ [gds7 − gm7·gds3/gm1] / (gds7 − gds8)
-```
+A = np.array([
+  # net1: M1(PMOS diode) + M3(NMOS drain)
+  [gm1+gds_eq_LOAD+gds3,  0,                 0,                -(gm3+gds3)           ],
+  # net5: M2(PMOS mirror) + M4(NMOS drain)
+  [gm1,                    gds_eq_LOAD+gds3,  0,                -(gm3+gds3)           ],
+  # vout: M7(PMOS CS) + M8(NMOS)
+  [0,                      gm7,               gds7+gds_eq_OBIAS, 0                    ],
+  # net2: M3(source) + M4(source) + M6(drain)
+  [gds3,                   gds3,              0,                -2*gm3-2*gds3+gds_eq_TAIL],
+])
 
-The numerator contains **two competing terms**:
-- `gds7`: M7's channel-length modulation pushes Vout toward VDD
-- `gm7·gds3/gm1`: net5 overshoot reduces M7 Vsg, opposing the push
+b = np.array([gm1+gds_eq_LOAD, gm1+gds_eq_LOAD, gm7+gds7, 0])
 
-When `gm7·gds3/gm1 ≈ gds7`, the terms nearly cancel → very high PSRR⁺.
-
-**Full PSRR⁺:**
-```
-PSRR⁺ = A0 · (gds7 − gds8) / |gds7 − gm7·gds3/gm1|
+x = np.linalg.solve(A, b)
+A_supply_open = x[2]   # δVout/δVDD
 ```
 
-⚠️ **Accuracy note:** This formula gives ~6 dB overestimate compared to
-SPICE because it neglects finite M6 impedance effects on the tail node
-(which slightly degrades the net5 tracking). The remaining error also
-depends on the gds7/gds8 ratio — the formula is most accurate when
-gds7 and gds8 are well separated.
+The dominant coupling path: M7 gds7 pushes vout toward VDD. The
+mirror's VDD tracking partially cancels this, but the tail node shift
+(δVnet2 > 0) limits the cancellation. Typical `A_supply_open ≈ 0.4–0.7`
+(much larger than the 3-step prediction of ≈ 0).
 
-⚠️ **The legacy formula `PSRR⁺ ≈ gm3/gds3` is incorrect.** It models
-the VDD-to-net5 path as a simple `gds3/(gds3+gds1)` resistive divider,
-ignoring that M1/M2 (sources at VDD) actively track VDD at their
-outputs. The legacy formula underestimates PSRR⁺ by 20–25 dB.
+**Closed-loop PSRR⁺:**
+```
+PSRR⁺ ≈ (1 + A0) / |A_supply_open|    [dB: ≈ A0_dB + |A_supply_dB|]
+```
+
+⚠️ **Accuracy:** The 4-node formula gives ~15–20 dB overestimate vs
+SPICE. The residual error comes from gmb terms, frequency-dependent
+feedback through Cc, and M6 operating-point sensitivity. Use SPICE for
+final PSRR⁺ verification.
 
 ### CM Input Range
 
@@ -549,9 +545,9 @@ V_cm,max = VDD - |VSG_M1| + VTN       (M1 headroom limit)
 
 | Node | Devices at node | Capacitance |
 |------|----------------|-------------|
-| 1st_out (net5, gate M7) | M2 drain, M4 drain, M7 gate | `C1 = Cgs7 + Cdb2 + Cdb4 + Cgd2 + Cgd4` |
-| Mirror (net1) | M1 drain/gate, M3 drain, M2 gate | `C2 = Cgs1 + Cgs2 + Cdb1 + Cdb3 + Cgd3` |
-| Output (Vout) | M7 drain, M8 drain, CL | `CTL = CL + Cdb7 + Cdb8 + Cgd7 + Cgd8` |
+| 1st_out (net5, gate M7) | M2 drain, M4 drain, M7 gate | `C1 = Cgs7 + Cdb2 + Cdb4 + Cgd2 + Cgd4` (Cgd7 in cubic Ycomp) |
+| Mirror (net1) | M1 drain/gate, M3 drain, M2 gate | `C2 = Cgs1 + Cgs2 + Cdb1 + Cdb3 + Cgd2 + Cgd3` |
+| Output (Vout) | M7 drain, M8 drain, CL | `CTL = CL + Cdb7 + Cdb8 + Cgd8` (Cgd7 in cubic Ycomp) |
 
 All Cgd and Cdb values MUST include extrinsic components (see
 `general/knowledge/lut-parameter-derivation.md` — Extrinsic Capacitance

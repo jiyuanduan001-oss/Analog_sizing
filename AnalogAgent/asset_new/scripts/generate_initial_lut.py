@@ -27,11 +27,15 @@ from pathlib import Path
 # Configuration
 # ---------------------------------------------------------------------------
 
-NGSPICE     = "/rdf/Applications/ngspice/bin/ngspice"
-PDK_LIB     = ("/rdf/shared/design_automation/Analog_Sizing/CircuitCollector/"
-               "CircuitCollector/PDK/sky130_pdk/libs.tech/ngspice/sky130.lib.spice")
+import os
 
-ASSET_NEW   = Path("/rdf/shared/design_automation/Analog_Sizing/AnalogAgent/asset_new")
+NGSPICE     = os.environ.get("NGSPICE", "ngspice")
+PDK_LIB     = os.environ.get("PDK_LIB",
+               str(Path(__file__).resolve().parents[3]
+                   / "CircuitCollector" / "CircuitCollector" / "PDK"
+                   / "sky130_pdk" / "libs.tech" / "ngspice" / "sky130.lib.spice"))
+
+ASSET_NEW   = Path(__file__).resolve().parents[1]
 WORK_DIR    = Path("/tmp/lut_char_new")
 
 DEVICES = {

@@ -144,11 +144,6 @@ wrdata {{data_prefix}}_waveform_AC.txt vdb(opout) vp(opout) vdb(cm3) vdb(ppsr1) 
 {% endif %}
 {% endif %}
 
-{# op
-print @m.x1.xm1.msky130_fd_pr__nfet_01v8_lvt[vgs] @m.x1.xm1.msky130_fd_pr__nfet_01v8_lvt[vds] @m.x1.xm1.msky130_fd_pr__nfet_01v8_lvt[vth] > op_region.txt #}
-{# op
-.include /home/G30079315/code/CircuitCollector/CircuitCollector/spec_lib/opamp/two_stages_op_amp_dev_params.spice #}
-
 {% if measure_noise %}
 * ============================================================
 * Noise analysis — two-pass approach

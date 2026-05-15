@@ -27,7 +27,7 @@ import numpy as np
 # Configuration
 # ---------------------------------------------------------------------------
 
-ASSET_NEW = Path("/rdf/shared/design_automation/Analog_Sizing/AnalogAgent/asset_new")
+ASSET_NEW = Path(__file__).resolve().parents[1]
 W = 2e-6   # 2 um
 DEVICES = ["nfet_01v8", "pfet_01v8"]
 CORNERS = ["tt", "ff", "ss", "fs", "sf"]

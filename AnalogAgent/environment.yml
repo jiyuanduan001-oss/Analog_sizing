@@ -14,5 +14,6 @@ dependencies:
     - pandas==3.0.1
     - python-dotenv==1.2.2
     - requests==2.32.5
+    - matplotlib
     - toml==0.10.2
     - -e ../CircuitCollector

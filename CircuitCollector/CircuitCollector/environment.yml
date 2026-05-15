@@ -278,4 +278,3 @@ dependencies:
       - watchfiles==1.1.0
       - websockets==15.0.1
       - yarl==1.20.1
-prefix: /home/G30079315/ENTER/envs/CircuitCollector

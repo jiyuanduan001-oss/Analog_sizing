@@ -17,7 +17,7 @@ that closely match SPICE AC analysis.
           |          |
    V2 (net1)      V1 (vout) ── CL ── GND
           |          |
-   vinn──[M1]  [M2]──vinp       NMOS DIFF_PAIR
+   vinp──[M2]  [M1]──vinn       NMOS DIFF_PAIR
           └────┬────┘
             V3 (net2)
                |
@@ -25,6 +25,9 @@ that closely match SPICE AC analysis.
                |
              GND
 ```
+
+M1 (gate=vinn) has drain at V1 (vout); M2 (gate=vinp) has drain at V2 (net1).
+vinp ↑ → M2 current ↑ → net1 rises → M5 mirror increases → vout rises (non-inverting).
 
 | Device | Type | Gate | Drain | Source | Bulk |
 |--------|------|------|-------|--------|------|

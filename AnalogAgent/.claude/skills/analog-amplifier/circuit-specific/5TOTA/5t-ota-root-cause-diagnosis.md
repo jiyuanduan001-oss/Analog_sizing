@@ -52,18 +52,67 @@ Note: M6 is diode-connected → always saturated.
 
 ---
 
+## Fault Tree: Tail Current Source Headroom
+
+The TAIL (M3) saturation margin is a cross-cutting concern: when M3
+operates near the saturation boundary, its effective gds rises steeply,
+degrading **multiple specs simultaneously** — CMRR, PSRR⁻, GBW (via
+mirror current loss), and indirectly noise and SR. If more than one of
+these specs fails at the same time, check M3 headroom first.
+
+```
+M3 saturation margin too low  (margin < 100 mV, or multiple specs degraded)
+    │
+    ├── Reduce Vdsat of BIAS_GEN / TAIL
+    │   Push gm/ID of BIAS_GEN (M4) toward weaker inversion.
+    │   Since M4 and M3 share the same per-instance W/L, lowering
+    │   Vdsat on M4 lowers Vdsat on M3 simultaneously.
+    │   This is the most direct fix — it does not change VGS_M1 or
+    │   the voltage stack above M3.
+    │
+    ├── Reduce VGS of DIFF_PAIR
+    │   Push gm/ID of DIFF_PAIR toward weaker inversion.
+    │   VDS_M3 = V_cm − VGS_M1, so any reduction in VGS_M1 adds
+    │   directly to M3 headroom.
+    │   ⚠️ Side effect: wider input pair, more parasitic cap, lower ft.
+    │
+    ├── Increase L4 (= L3) for higher intrinsic ro per device
+    │   Higher ro improves small-signal tail impedance even at the
+    │   same saturation margin.
+    │   ⚠️ Side effect: W4 shrinks, may force M4_M > 1
+    │   (discretization can double the effective mirror ratio).
+    │
+    └── Increase I_bias to reduce mirror ratio
+        Lower M3_M means less VDS compression from finite ro.
+        Only if the spec form allows it (I_bias is often constrained).
+
+Cross-references:
+  CMRR depends on ro_eq_TAIL — see "CMRR Too Low"
+  PSRR⁻ scales with ro_eq_TAIL — see "PSRR Too Low"
+  GBW shortfall from mirror current loss — see "GBW Too Low"
+```
+
+⚠️ **Analytical overestimate warning:** The small-signal CMRR and
+PSRR⁻ formulas use gds3 as a constant, but near the saturation
+boundary gds changes steeply with VDS. The analytical prediction can
+overestimate CMRR by 15–20 dB when M3 margin is below 100 mV. Always
+verify with SPICE, and if the analytical model predicts comfortable
+CMRR margin but SPICE fails, check M3 headroom.
+
+---
+
 ## Fault Tree: Gain Too Low
 
 ```
-A0 = gm1 / (gds1 + gds5) < A0_target
+A0 = gm1 / (gds1 + gds_eq_LOAD) < A0_target
     │
     ├── gds1 too large → increase L1
     │   ⚠️ Side effect: larger Cgs1, Cgd1 → may affect GBW and mirror cap
     │
-    ├── gds5 too large → increase L5
+    ├── gds_eq_LOAD too large → increase L5 (or L_cas for cascode)
     │   ⚠️ Side effect: larger Cgs5 → lower fp2 → PM may degrade
     │
-    └── Both gds1 and gds5 need reduction → increase both L1 and L5
+    └── Both gds1 and gds_eq_LOAD need reduction → increase both L1 and L5
 ```
 
 ---
@@ -71,17 +120,16 @@ A0 = gm1 / (gds1 + gds5) < A0_target
 ## Fault Tree: GBW Too Low
 
 ```
-GBW = gm1 / (2π × C_out) < GBW_target
+GBW = gm1 / (2π × C1) < GBW_target
     │
     ├── gm1 too low
     │   → Increase I_tail (raises gm1 = gm/ID × I_tail/2)
     │   ⚠️ Side effect: more power
     │
-    │
-    └── C_out too large (parasitic caps significant)
+    └── C1 too large (parasitic caps significant)
         → This is a post-simulation diagnosis (Cdb not known pre-sim)
-        → Reduce device size if possible (shorter L smaller W)
-        ⚠️ Side effect: lower gain 
+        → Reduce device size if possible (shorter L, smaller W)
+        ⚠️ Side effect: lower gain
         → Accept that analytical GBW overestimates when devices are wide
 ```
 
@@ -89,10 +137,12 @@ GBW = gm1 / (2π × C_out) < GBW_target
 
 ## Fault Tree: Phase Margin Too Low
 
-The 5T OTA rarely has PM problems. It starts at 90° (no RHP zero, no Miller
-cap), and the mirror pole-zero doublet (fz2 = 2×fp2) means the zero always
-partially recovers phase lost to the pole. PM below 60° is unlikely under
-normal sizing conditions.
+The 5T OTA rarely has PM problems. It starts at 90° with no Miller cap,
+and the mirror pole-zero doublet (fz ≈ 2×fp2) means the zero always
+partially recovers phase lost to the pole. There is an RHP zero at
+`fz_rhp = gm1/(2π·Cgd1)` from diff-pair Cgd feedforward, but it is
+near ft and typically negligible. PM below 60° is unlikely under normal
+sizing conditions.
 
 ---
 
@@ -112,13 +162,17 @@ SR = I_tail / (CL + Cdb1 + Cdb5 + Cgd5) < SR_target
 ## Fault Tree: Output Swing Too Low
 
 ```
-V_swing = VDD - Vdsat_M1 - Vdsat_M5 < Swing_target
+V_swing = VDD - V_headroom_LOAD - V_headroom_TAIL - Vdsat_M1 < Swing_target
     │
     ├── Vdsat_M1 too large → increase gm/ID of DIFF_PAIR (weaker inversion)
     │   ⚠️ Side effect: lower ft, larger W
     │
-    └── Vdsat_M5 too large → increase gm/ID of LOAD (weaker inversion)
-        ⚠️ Side effect: lower ft, larger W
+    ├── V_headroom_LOAD too large → increase gm/ID of LOAD (weaker inversion)
+    │   ⚠️ Side effect: lower ft, larger W
+    │   For cascode load: headroom = Vgs + vdsat; consider lv_cascode
+    │
+    └── V_headroom_TAIL too large → increase gm/ID of TAIL (weaker inversion)
+        ⚠️ Side effect: larger device area
 ```
 
 ---
@@ -126,10 +180,14 @@ V_swing = VDD - Vdsat_M1 - Vdsat_M5 < Swing_target
 ## Fault Tree: CMRR Too Low
 
 ```
-CMRR = 2·gm1·gm5·Rout·ro3 < CMRR_target
+CMRR ≈ 2·gm1·gm5·Rout·ro_eq_TAIL < CMRR_target
     │
-    ├── ro3 too low (gds3 too high) → increase L3
-    │   This is the primary fix. TAIL is not speed-critical.
+    ├── ro_eq_TAIL too low (most common root cause)
+    │   → First check M3 saturation margin.
+    │     If margin < 100 mV or multiple specs (CMRR + PSRR⁻ + GBW)
+    │     fail together → see "Tail Current Source Headroom" fault tree.
+    │   → If M3 is well saturated: increase L3 (= L4) or add cascode to TAIL.
+    │     TAIL is not speed-critical.
     │
     └── A0 too low → fix gain first (see gain fault tree)
 ```
@@ -143,7 +201,10 @@ PSRR⁺ ≈ A0 < PSRR⁺_target
     → PSRR⁺ is limited by DC gain. Fix gain (see gain fault tree).
 
 PSRR⁻ ≈ CMRR < PSRR⁻_target
-    → Same as CMRR. Increase L3 for higher ro3.
+    → Same root cause as CMRR — dominated by tail impedance.
+    → If M3 margin < 100 mV or CMRR also fails
+      → see "Tail Current Source Headroom" fault tree.
+    → If M3 well saturated: increase L3 (= L4) for higher ro_eq_TAIL.
 ```
 
 ---
@@ -158,6 +219,23 @@ P = (I_tail + I_bias) × VDD > P_target
         ⚠️ Side effect: higher gm/ID → lower ft, larger W, lower SR
 ```
 
+## Fault Tree: Power Under-Utilized
+
+When power is well below the budget but other specs (GBW, noise, SR)
+are failing, the design is not spending enough of the available power.
+Unused power margin should be redirected to fix failing specs:
+
+```
+P << P_target AND other specs failing
+    │
+    ├── GBW or noise limited
+    │   → Increase I_tail (raises gm1 for GBW; lowers thermal noise)
+    │
+    └── SR limited
+        → Increase I_tail (SR = I_tail / C1 for the 5T OTA)
+        → This directly uses power headroom for a concrete spec benefit
+```
+
 ---
 
 ## Fault Tree: Noise Too High
@@ -169,7 +247,7 @@ by the simulator. For pre-simulation guidance:
 Integrated noise too high
     │
     ├── Thermal noise dominated
-    │   → Increase gm1 (more current or lower gm/ID)
+    │   → Increase gm1 (more current or larger gm/ID)
     │   → gm5/gm1 ratio also matters — minimize gm5 relative to gm1
     │
     └── 1/f noise dominated

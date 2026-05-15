@@ -149,9 +149,9 @@ Cgd3_sp = abs(op["m3"]["cgd"]); Cgd4_sp = Cgd3_sp
 Cgd7_sp = abs(op["m7"]["cgd"]); Cdb7_sp = abs(op["m7"]["cdb"])
 Cgd8_sp = abs(op["m8"]["cgd"]); Cdb8_sp = abs(op["m8"]["cdb"])
 
-# Node caps from SPICE OP
-C1_sp  = Cgs7_sp + Cdb2_sp + Cdb4_sp + Cgd2_sp + Cgd4_sp + Cgd7_sp
-CTL_sp = CL + Cdb7_sp + Cdb8_sp + Cgd7_sp + Cgd8_sp
+# Node caps from SPICE OP (Cgd7 excluded — it's in the cubic Ycomp)
+C1_sp  = Cgs7_sp + Cdb2_sp + Cdb4_sp + Cgd2_sp + Cgd4_sp
+CTL_sp = CL + Cdb7_sp + Cdb8_sp + Cgd8_sp
 C2_sp  = Cgs1_sp + Cgs2_sp + Cdb1_sp + Cdb3_sp + Cgd2_sp + Cgd3_sp
 
 # Recompute specs from SPICE OP
@@ -163,11 +163,26 @@ GBW_op  = gm3_sp / (2π × Cc)
 ω_c_op  = 2π × GBW_op
 G_net1  = gm1_sp + gds1_sp + gds3_sp
 p3_op   = G_net1 / C2_sp
-p4_op   = gm7_sp / C1_sp
 fz_mir  = 2 * p3_op / (2π)
 fz_rhp  = gm3_sp / (2π × Cgd3_sp)
-PM_op   = 90 - atan(ω_c_op/p3_op) - atan(ω_c_op/p4_op)
-        + atan(ω_c_op/(fz_mir*2π)) - atan(ω_c_op/(fz_rhp*2π))
+
+# KCL cubic for p2/p4 (see tsm-equation.md)
+Go_op = gds7_sp + gds8_sp;  G1_op = gds1_sp + gds3_sp
+Rc_approx = (1/gm7_sp) * (Cc+C1_sp) * (Cc+CTL_sp) / Cc**2
+tau_op = Rc_approx * Cc
+d0 = Go_op * G1_op
+d1 = Go_op*C1_sp + G1_op*CTL_sp + Go_op*G1_op*tau_op + Cc*(gm7_sp+Go_op+G1_op) + gm7_sp*Cgd7_sp
+d2 = C1_sp*CTL_sp - Cgd7_sp**2 + tau_op*(G1_op*CTL_sp + Go_op*C1_sp + gm7_sp*Cgd7_sp) + Cc*(C1_sp+CTL_sp) - 2*Cc*Cgd7_sp
+d3 = tau_op * (C1_sp*CTL_sp - Cgd7_sp**2)
+import numpy as np
+poles_op = sorted(np.roots([d3, d2, d1, d0]), key=lambda x: abs(x))
+p2_op = abs(poles_op[1]);  p4_op = abs(poles_op[2])
+Rc_op = 1/gm7_sp + 1/(p2_op * Cc)
+z_Rc_op = 1 / (Cc * (Rc_op - 1/gm7_sp))
+
+PM_op = 90 - atan(ω_c_op/p2_op) + atan(ω_c_op/z_Rc_op) \
+           - atan(ω_c_op/p3_op) - atan(ω_c_op/p4_op) \
+           + atan(ω_c_op/(fz_mir*2π)) - atan(ω_c_op/(fz_rhp*2π))
 ```
 
 For the **5T OTA** topology:
@@ -225,6 +240,7 @@ ELIF any device NOT in saturation:
 
 ELIF any active spec FAILED:
   → Spec failure — proceed to root-cause-diagnosis
+  → ⚠️ Check power utilization first (see top of root-cause-diagnosis)
 ```
 
 ## Step 5 — Print Iteration Summary

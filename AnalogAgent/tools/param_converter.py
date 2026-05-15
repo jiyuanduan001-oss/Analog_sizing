@@ -72,6 +72,17 @@ def convert_sizing(
         {"status": "ok", "params": {...}, "config_path": "..."}
         or {"status": "error", "message": "..."}
     """
+    # Auto-load from disk cache if not in memory (cross-process persistence).
+    # Import here to avoid circular import (topology_manager imports TOPOLOGY_REGISTRY).
+    if topology not in TOPOLOGY_REGISTRY:
+        from tools.topology_manager import _load_meta
+        cached = _load_meta(topology)
+        if cached is not None:
+            TOPOLOGY_REGISTRY[topology] = {
+                "bridge_module": "tools.bridge_generic",
+                **cached,
+            }
+
     if topology not in TOPOLOGY_REGISTRY:
         available = list(TOPOLOGY_REGISTRY.keys())
         return {
