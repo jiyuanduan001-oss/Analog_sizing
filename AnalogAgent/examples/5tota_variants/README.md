@@ -3,7 +3,7 @@
 Three bare SPICE netlists for the classic 5-transistor OTA, differing only
 in how the PMOS current-mirror **active load** is implemented. The
 sub-block abstraction in
-`.claude/skills/analog-amplifier/general/knowledge/mirror-load-structures.md`
+`skills/analog-amplifier/general/knowledge/mirror-load-structures.md`
 defines these three variants.
 
 All netlists use NMOS diff pair M1/M2, NMOS tail M3, NMOS bias reference M4,

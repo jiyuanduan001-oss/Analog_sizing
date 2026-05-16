@@ -29,7 +29,7 @@ load_dotenv()
 
 from scripts.lut_lookup import lut_query as _lut_query, list_available_L as _list_L
 
-SKILLS_DIR = Path(__file__).parent.parent / ".claude" / "skills"
+SKILLS_DIR = Path(__file__).parent.parent / "skills"
 TRACES_DIR = Path(__file__).parent.parent / "traces"
 TRACES_DIR.mkdir(exist_ok=True)
 

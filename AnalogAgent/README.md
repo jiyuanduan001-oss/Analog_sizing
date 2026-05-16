@@ -1,285 +1,145 @@
 # AnalogAgent
 
-LLM-guided analog amplifier sizing agent using gm/ID methodology, SPICE
-verification, and iterative root-cause diagnosis. Works with
-[Claude Code](https://docs.anthropic.com/en/docs/claude-code) as the
-interactive front-end.
+LLM-driven analog IC sizing agent. Operates as a set of structured skills that guide any LLM through gm/ID-based sizing, SPICE verification, and iterative root-cause diagnosis.
 
----
+## How it works
 
-## Prerequisites
-
-| Dependency | Version | Notes |
-|---|---|---|
-| [Conda](https://docs.conda.io/) (or Mamba) | any | Environment management |
-| [ngspice](https://ngspice.sourceforge.io/) | 42+ recommended | SPICE simulator |
-| [Claude Code](https://docs.anthropic.com/en/docs/claude-code) | latest | CLI / VS Code / JetBrains |
-| Anthropic API key | — | For Claude Code |
-
-**Optional:** Redis (for simulation result caching). The system works
-without it — caching is silently disabled.
-
----
-
-## 1. Directory Layout
-
-Place both repositories side by side under the **same parent directory**:
+AnalogAgent is **not** a standalone program you run. It is a workspace that an LLM agent (Claude Code, Codex, Cursor, etc.) opens and operates in. The agent reads the skill stack, executes Python, calls the CircuitCollector simulation server over HTTP, and iterates until all specs are met.
 
 ```
-parent/
-├── AnalogAgent/          # This repo — LLM agent + LUT data + skills
-└── CircuitCollector/     # Simulation server — testbench gen + ngspice runner
+LLM agent
+  reads  skills/analog-amplifier/SKILL.md        (design flow)
+  calls  scripts/lut_lookup.py                    (gm/ID LUT queries)
+  calls  tools/bridge_generic.py                  (simulation bridge)
+  calls  tools/optimizer.py                       (post-sizing optimizer)
+  writes simulation_waveform/nominal/*.png        (Bode, transient, swing, noise plots)
 ```
 
-This is required because `AnalogAgent/environment.yml` installs
-CircuitCollector as an editable package via `pip install -e ../CircuitCollector`.
-
----
-
-## 2. Install ngspice
-
-ngspice must be accessible as `ngspice` on your `PATH` when the
-CircuitCollector server runs.
-
-**Option A — System package manager:**
-
-```bash
-# Ubuntu / Debian
-sudo apt install ngspice
-
-# Fedora / RHEL
-sudo dnf install ngspice
-
-# macOS (Homebrew)
-brew install ngspice
-```
-
-**Option B — Custom install location:**
-
-If ngspice is installed elsewhere (e.g. `/opt/ngspice/bin/ngspice`),
-add it to `PATH` before starting the server:
-
-```bash
-export PATH=/opt/ngspice/bin:$PATH
-```
-
-**Verify:**
-
-```bash
-ngspice --version
-# Should print: ngspice-42 (or similar)
-```
-
----
-
-## 3. Create Conda Environments
-
-Two separate environments are needed.
-
-### 3a. CircuitCollector environment
-
-```bash
-cd CircuitCollector
-conda env create -f CircuitCollector/environment.yml
-conda activate CircuitCollector
-pip install -e .
-conda deactivate
-```
-
-### 3b. AnalogAgent environment
-
-```bash
-cd ../AnalogAgent
-conda env create -f environment.yml
-conda activate Agent
-```
-
-> The `Agent` environment installs CircuitCollector in editable mode
-> automatically (via `pip install -e ../CircuitCollector` in
-> `environment.yml`). If this step fails, run it manually:
-> ```bash
-> pip install -e ../CircuitCollector
-> ```
-
----
-
-## 4. Configure API Key
-
-Create a `.env` file in `AnalogAgent/` with your Anthropic API key:
-
-```bash
-cd AnalogAgent
-echo "ANTHROPIC_API_KEY=sk-ant-..." > .env
-```
-
-> `.env` is listed in `.gitignore` and will not be committed.
-
----
-
-## 5. Start the CircuitCollector Server
-
-The server must be running before any simulation can execute.
-
-```bash
-# Terminal 1 — keep this running
-conda activate CircuitCollector
-export PATH=/path/to/ngspice/bin:$PATH    # skip if ngspice is already on PATH
-cd CircuitCollector
-uvicorn CircuitCollector.api.main:app --host 0.0.0.0 --port 8001
-```
-
-Or run in the background:
-
-```bash
-conda activate CircuitCollector
-export PATH=/path/to/ngspice/bin:$PATH
-cd CircuitCollector
-nohup uvicorn CircuitCollector.api.main:app --host 0.0.0.0 --port 8001 \
-  > CircuitCollector/logs/nohup.out 2>&1 &
-```
-
-**Verify the server is up:**
-
-```bash
-curl http://localhost:8001/health
-# {"status":"ok"}
-```
-
----
-
-## 6. Run AnalogAgent with Claude Code
-
-```bash
-# Terminal 2
-conda activate Agent
-cd AnalogAgent
-claude                    # starts Claude Code CLI
-```
-
-Or open `AnalogAgent/` in VS Code / JetBrains with the Claude Code
-extension installed.
-
-### Quick Start — Size a 5T OTA
-
-Paste a netlist and specs directly into Claude Code. For example:
-
-```
-.subckt 5tota gnda vdda vinn vinp vout Ib
-XM1 vout  vinn net2 gnda sky130_fd_pr__nfet_01v8
-XM2 net1  vinp net2 gnda sky130_fd_pr__nfet_01v8
-XM5 vout  net1 vdda vdda sky130_fd_pr__pfet_01v8
-XM6 net1  net1 vdda vdda sky130_fd_pr__pfet_01v8
-XM3 net2  net3 gnda gnda sky130_fd_pr__nfet_01v8
-XM4 net3  net3 gnda gnda sky130_fd_pr__nfet_01v8
-I0  vdda  net3 Ib
-.ends 5tota
-
-Use the analog-amplifier skill to size this.
-Specs: VDD=1.8V, CL=2pF, Gain>40dB, GBW>20MHz, PM>60deg, Ib=5uA
-```
-
-The agent will:
-1. Identify the topology (5T OTA)
-2. Register it with CircuitCollector
-3. Size devices using gm/ID + LUT
-4. Run SPICE simulation and verify
-5. Diagnose and fix any spec failures
-6. Produce a full design review
-
-### Supported Topologies
-
-| Topology | Description |
-|---|---|
-| 5T OTA | Diff pair + mirror load (single / cascode / LV-cascode variants) |
-| Two-Stage Miller (TSM) | 1st stage + CS output + Miller compensation |
-| Folded-Cascode OTA | Diff pair folded into opposite-type cascode |
-| Telescopic OTA | Same-type cascode stack |
-| Rail-to-Rail Opamp | Complementary N+P inputs + class-AB output |
-
----
-
-## Project Structure
+## Directory structure
 
 ```
 AnalogAgent/
-├── environment.yml              # Conda env (Python 3.11)
-├── .env                         # ANTHROPIC_API_KEY (git-ignored)
-├── agent/                       # LLM agent orchestration
-├── tools/                       # CircuitCollector API client + sizing bridges
-│   ├── api_client.py            #   HTTP client (localhost:8001)
-│   ├── bridge_generic.py        #   Generic topology sizing → params
-│   ├── param_converter.py       #   Topology dispatcher
-│   ├── topology_manager.py      #   Dynamic registration
-│   └── optimizer.py             #   CMA-ES numerical optimization
-├── scripts/
-│   └── lut_lookup.py            # gm/ID LUT query API
-├── asset_new/                   # Pre-generated LUT data (SKY130)
-│   ├── nfet_01v8/               #   5 corners x 3 temps x 12 lengths
-│   └── pfet_01v8/
-├── .claude/
-│   ├── skills/analog-amplifier/ # Hierarchical skill stack (design flows,
-│   │                            #   equations, root-cause diagnosis)
-│   └── settings.local.json      # Claude Code permissions
-└── examples/                    # Example netlists
+  skills/analog-amplifier/          Procedural skill stack (markdown, agent-agnostic)
+    SKILL.md                          Master flow definition (6 stages)
+    general/flow/                     Shared: spec validation, circuit ID, sim verification, design review
+    general/knowledge/                Shared: LUT derivation, mirror structures, optimizer, PM regression
+    circuit-specific/5TOTA/           5T OTA: equations, design flow, root-cause diagnosis
+    circuit-specific/tsm/             Two-Stage Miller: equations, design flow, root-cause diagnosis
+
+  tools/                            Python integration layer
+    api_client.py                     HTTP client for CircuitCollector (/simulate, /register_circuit, /health)
+    bridge_generic.py                 Topology-agnostic simulation bridge (role targets -> params -> simulate)
+    param_converter.py                Converts gm/ID sizing targets to CircuitCollector parameter dicts
+    topology_manager.py               Dynamic topology registration (in-memory -> disk cache -> server)
+    optimizer.py                      CMA-ES + coordinate descent post-sizing optimizer
+    waveform_utils.py                 Waveform parsing, annotated Bode/transient/swing/noise plots
+
+  scripts/
+    lut_lookup.py                     gm/ID LUT query API (lut_query, list_available_L, extrinsic_caps)
+
+  asset_new/                        Pre-computed transistor characterization data
+    nfet_01v8/                        NMOS 1.8V: 5 corners x 3 temps x 13 channel lengths
+    pfet_01v8/                        PMOS 1.8V: same coverage
+
+  examples/                         Reference netlists
+    5tota_variants/                   5tota_single.sp, 5tota_cascode.sp, 5tota_lv_cascode.sp
+    tsm_variants/                     tsm_single.sp, tsm_cascode.sp, tsm_lv_cascode.sp
+
+  spec-form-template.md             User-facing spec form (fill in VDD, CL, Gain, GBW, PM, etc.)
+  CLAUDE.md                         Auto-loaded instructions for Claude Code
+  AGENTS.md                         Auto-loaded instructions for Codex
+  environment.yml                   Conda environment definition
 ```
 
+## Skill stack
+
+The design flow is encoded as markdown procedures in `skills/analog-amplifier/`. The LLM reads and executes them step by step.
+
+| Stage | Skill file | What it does |
+|-------|-----------|-------------|
+| [1] Spec Understanding | `general/flow/spec-understanding.md` | Validate 5 required fields, check LUT temperature, parse optional specs |
+| [2] Circuit Understanding | `general/flow/circuit-understanding.md` | Parse netlist, match topology, generate Jinja2 template, register with server |
+| [3] Design Flow | `circuit-specific/<topo>/*-design-flow.md` | gm/ID-based sizing: diff pair, load, output stage, bias mirrors, compensation |
+| [4] Simulation Verification | `general/flow/simulation-verification.md` | Run SPICE, check OP saturation, compare analytical vs SPICE |
+| [5] Root-Cause Diagnosis | `circuit-specific/<topo>/*-root-cause-diagnosis.md` | Fault trees: gain, GBW, PM, SR, CMRR, PSRR, noise, swing, mismatch |
+| [6] Design Review | `general/flow/design-review.md` | Final report with analytical / regression / OP-based / SPICE columns |
+
+Supporting knowledge files:
+- `general/knowledge/lut-parameter-derivation.md` — How to derive all device params from a single LUT query
+- `general/knowledge/mirror-load-structures.md` — Single / cascode / wide-swing cascode sub-block formulas
+- `general/knowledge/numerical-optimization.md` — CMA-ES optimizer procedure and penalty functions
+- `general/knowledge/self-evolving-corrections.md` — Regression-based PM correction that improves over runs
+
+## gm/ID look-up tables
+
+Pre-computed characterization data for SKY130 1.8V devices:
+
+| Parameter | Unit | Description |
+|-----------|------|-------------|
+| `gm_gds` | V/V | Intrinsic gain |
+| `id_w` | A/m | Current density |
+| `ft` | Hz | Transit frequency |
+| `cgs_w`, `cgd_w`, `cdb_w` | F/m | Capacitance densities |
+| `vdsat` | V | Saturation voltage |
+| `vth` | V | Threshold voltage |
+
+**Coverage:** 5 corners (tt, ff, ss, fs, sf) x 3 temperatures (-40, 25, 85 C) x 13 channel lengths (0.18 -- 6.0 um). Intermediate temperatures are interpolated automatically.
+
+**API:**
+```python
+from scripts.lut_lookup import lut_query, list_available_L, extrinsic_caps
+
+gm_gds = lut_query('nfet', 'gm_gds', L=0.5, corner='tt', temp='27C', gm_id_val=12)
+L_vals = list_available_L('nfet', corner='tt', temp='27C')
+ex = extrinsic_caps('nfet', W=10e-6, M=1)  # gate-drain overlap, junction sidewall
 ```
-CircuitCollector/
-├── setup.py                     # pip install -e .
-├── CircuitCollector/
-│   ├── api/                     # FastAPI server (port 8001)
-│   ├── runner/                  # Testbench generation + ngspice execution
-│   ├── spec_lib/                # Measurement templates (Jinja2)
-│   ├── config/skywater/opamp/   # TOML configs per topology
-│   ├── circuits/opamp/          # Netlist templates (Jinja2)
-│   ├── PDK/sky130_pdk/          # Skywater 130nm PDK (bundled)
-│   ├── output/                  # Simulation outputs (git-ignored)
-│   ├── cache/                   # Redis + SQLite cache (optional)
-│   └── environment.yml          # Conda env
-└── scripts/                     # Netlist conversion utilities
-```
 
----
+## Simulation bridge
 
-## Troubleshooting
-
-| Symptom | Cause | Fix |
-|---|---|---|
-| `Connection refused` on simulate | CircuitCollector server not running | Start the server (Step 5) |
-| `ngspice: command not found` in sim logs | ngspice not on PATH in server's shell | `export PATH=/path/to/ngspice/bin:$PATH` before starting server |
-| GBW / PM return `null` | ngspice failed silently | Check `CircuitCollector/output/opamp/<topo>/<topo>.log` for errors |
-| `Unknown topology` from `convert_sizing` | Topology not registered in this session | The agent auto-registers; if running manually, call `ensure_topology_registered()` first |
-| Redis warning on server start | Redis not installed | Safe to ignore — caching is disabled, simulations still run |
-| `pip install -e ../CircuitCollector` fails | Repos not side by side | Ensure directory layout matches Step 1 |
-
----
-
-## LUT Data
-
-Pre-generated gm/ID lookup tables for SKY130 are in `asset_new/`.
-
-- **Devices:** `nfet_01v8`, `pfet_01v8`
-- **Corners:** `tt`, `ff`, `ss`, `fs`, `sf`
-- **Temperatures:** `-40C`, `25C`, `85C` (linear interpolation between these)
-- **Channel lengths:** 0.18, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0, 5.5, 6.0 um
-
-Each file contains 11 columns:
-`gm/id  gm/gds  id/W  ft  Cgg/W  Cgd/W  Cgs/W  Cdb/W  vgs  vth  vdsat`
-
-Query API:
+The bridge converts role-based sizing targets into flat parameter dicts and calls CircuitCollector:
 
 ```python
-from scripts.lut_lookup import lut_query, list_available_L
+from tools import convert_sizing, simulate_circuit
 
-# Get intrinsic gain at L=1um, gm/ID=12
-gain = lut_query('nfet', 'gm_gds', 1.0, gm_id_val=12, temp='27C', corner='tt')
+result = convert_sizing(
+    topology='tsm_single',
+    roles_raw={
+        "DIFF_PAIR": {"gm_id_target": 15, "L_guidance_um": 1.0, "id_derived": 75e-6},
+        "LOAD":      {"gm_id_target": 12, "L_guidance_um": 1.0, "id_derived": 75e-6},
+        ...
+    },
+    Ib_a=10e-6, Cc_f=4e-12, Rc_ohm=2700,
+)
 
-# List available channel lengths
-lengths = list_available_L('nfet', 'tt', '27C')
+sim = simulate_circuit(
+    result["params"],
+    config_path=result["config_path"],
+    corner='tt', temperature=27, supply_voltage=1.8, CL=5e-12,
+)
+
+print(sim['specs']['dcgain_'])       # 76.8 dB
+print(sim['specs']['phase_margin'])  # 64.1 deg
 ```
 
----
+## Optimizer
+
+Post-sizing numerical optimization that minimizes power / maximizes gain or GBW while keeping all specs above user targets:
+
+```python
+from tools import cma_es, make_batch_evaluator, compute_penalty
+
+best_params, best_specs = cma_es(
+    initial_params, config_path, targets, weights,
+    corner='tt', temperature=27, supply_voltage=1.8, CL=5e-12,
+)
+```
+
+## Prerequisites
+
+- **CircuitCollector** running on `localhost:8001` (see `setup_and_run.ipynb`)
+- **ngspice 46** on PATH (required by CircuitCollector)
+- **Python 3.11** in the `Agent` conda environment
 
 ## License
 
-See individual repository license files.
+MIT

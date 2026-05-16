@@ -48,6 +48,8 @@ class CacheManager:
             host=redis_host,
             port=redis_port,
             decode_responses=True,
+            socket_connect_timeout=1,
+            socket_timeout=1,
         )
 
         # SQLite database

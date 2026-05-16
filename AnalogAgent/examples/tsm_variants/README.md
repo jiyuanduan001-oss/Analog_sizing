@@ -3,7 +3,7 @@
 Three bare SPICE netlists for the two-stage Miller (TSM) OTA, differing only
 in how the PMOS current-mirror **active load** on the **first stage** is
 implemented. The sub-block abstraction in
-`.claude/skills/analog-amplifier/general/knowledge/mirror-load-structures.md`
+`skills/analog-amplifier/general/knowledge/mirror-load-structures.md`
 defines these three variants.
 
 The second stage (M7 CS amp, M8 current source), bias generation (M5 ref,
