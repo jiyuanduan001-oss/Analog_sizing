@@ -3,5 +3,4 @@ __pycache__/
 .env
 traces/
 memory/
-CLAUDE.md
 .nfs*
